@@ -16,7 +16,7 @@ $heartbeatFile  = "$Install\Logs\heartbeat.txt"
 $logFile        = "$Install\Logs\ip_monitor.log"
 
 # Update-Infos (GitHub RAW-Links!)
-$updateCheckFile = "$Install\last_update_check.txt"
+$updateCheckFile = "$Install\Logs\last_update_check.log"
 $updateInfoUrl   = "https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/DynDNS-Update.version"
 $updateScriptUrl = "https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/DynDNS-Update.ps1"
 
