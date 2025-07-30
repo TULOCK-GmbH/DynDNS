@@ -1,6 +1,6 @@
 # Version: 1.0.0
 
-# === Skriptpfad ermitteln (robust für alle Umgebungen) ===
+# === Skriptpfad ermitteln (robust f�r alle Umgebungen) ===
 if ($PSScriptRoot) {
     $selfPath = Join-Path $PSScriptRoot ($MyInvocation.MyCommand.Name)
 } else {
@@ -33,7 +33,7 @@ function Write-Log($msg) {
     Add-Content -Path $logFile -Value "$timestamp $msg"
 }
 
-# --- Automatische Update-Prüfung: Nur 1x täglich, Script startet sich bei Update selbst neu ---
+# --- Automatische Update-Pr�fung: Nur 1x t�glich, Script startet sich bei Update selbst neu ---
 function Get-LocalVersion {
     Get-Content $selfPath | Select-String -Pattern "^# Version:" | ForEach-Object {
         $_.ToString().Split(":")[1].Trim()
@@ -62,7 +62,7 @@ function Check-For-Update {
                 Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$selfPath`""
                 exit
             } else {
-                Write-Host "Kein Update nötig (Version: $localVersion)." -ForegroundColor Green
+                Write-Host "Kein Update n�tig (Version: $localVersion)." -ForegroundColor Green
                 $now | Set-Content $updateCheckFile
             }
         } catch {
@@ -93,7 +93,7 @@ if (!(Test-Path $settingsFile) -or !(Test-Path $pwFile)) {
 
     # Subdomain speichern
     $subdomain | Set-Content $settingsFile
-    # Passwort verschlüsselt speichern
+    # Passwort verschl�sselt speichern
     $pw | ConvertFrom-SecureString | Set-Content $pwFile
 
     Write-Host "Einstellungen gespeichert. Skript startet jetzt regulaer..." -ForegroundColor Green
@@ -112,7 +112,7 @@ function Get-PublicIP {
         try {
             $ip = Invoke-RestMethod -Uri $service -TimeoutSec 10
             if ($ip -and $ip -match '^\d{1,3}(\.\d{1,3}){3}$') {
-                Write-Log ("IP erfolgreich über {0}: {1}" -f $service, $ip)
+                Write-Log ("IP erfolgreich �ber {0}: {1}" -f $service, $ip)
                 return $ip.Trim()
             }
         } catch {
@@ -131,11 +131,11 @@ while ($true) {
         continue
     }
 
-    # DNS A-Record abfragen (Oeffentlicher Resolver, für Zuverlässigkeit)
+    # DNS A-Record abfragen (Oeffentlicher Resolver, f�r Zuverl�ssigkeit)
     try {
         $dnsEntry = Resolve-DnsName "$subdomain.soc-tulock.de" -Type A -Server "8.8.8.8" -ErrorAction Stop
         $dnsAIP = ($dnsEntry | Where-Object { $_.QueryType -eq 'A' }).IPAddress
-        Write-Log ("DNS-A-Eintrag für {0}.soc-tulock.de: {1}" -f $subdomain, $dnsAIP)
+        Write-Log ("DNS-A-Eintrag f�r {0}.soc-tulock.de: {1}" -f $subdomain, $dnsAIP)
     } catch {
         Write-Host "Konnte DNS-A-Eintrag nicht abfragen! Warte 1 Minute..." -ForegroundColor Yellow
         Write-Log ("FEHLER: Konnte DNS-A-Eintrag nicht abfragen: {0}" -f $_)
@@ -145,11 +145,11 @@ while ($true) {
 
     # Vergleich Online-IP mit DNS-A-Record
     if ($currentIP -eq $dnsAIP) {
-        Write-Host "DNS-A-Eintrag ist bereits aktuell ($currentIP). Kein DynDNS-Update nötig." -ForegroundColor Green
-        Write-Log ("DNS-A-Eintrag stimmt mit Online-IP überein: {0}" -f $currentIP)
+        Write-Host "DNS-A-Eintrag ist bereits aktuell ($currentIP). Kein DynDNS-Update n�tig." -ForegroundColor Green
+        Write-Log ("DNS-A-Eintrag stimmt mit Online-IP �berein: {0}" -f $currentIP)
     } else {
-        Write-Host "DNS-A-Eintrag ($dnsAIP) stimmt NICHT mit aktueller IP ($currentIP) überein. DynDNS-Update wird durchgeführt..." -ForegroundColor Red
-        Write-Log ("DNS-A-Eintrag stimmt NICHT mit aktueller IP überein. DynDNS-Update wird durchgeführt.")
+        Write-Host "DNS-A-Eintrag ($dnsAIP) stimmt NICHT mit aktueller IP ($currentIP) �berein. DynDNS-Update wird durchgef�hrt..." -ForegroundColor Red
+        Write-Log ("DNS-A-Eintrag stimmt NICHT mit aktueller IP �berein. DynDNS-Update wird durchgef�hrt.")
 
         try {
             if (-not (Test-Connection -ComputerName "dynamicdns.key-systems.net" -Count 1 -Quiet)) {
