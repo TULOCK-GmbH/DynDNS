@@ -453,7 +453,7 @@ $url = "https://dynamicdns.key-systems.net/update.php?hostname=$fullDomain&passw
 
 # startup logging
 Write-Log "=== DynDNS Monitor START ===" "INFO"
-Write-Log ("Version: {0}" -f "2.1.1") "INFO"
+Write-Log ("Version: {0}" -f "2.1.2") "INFO"
 Write-Log ("Script: {0}" -f $selfPath) "INFO"
 Write-Log ("Domain: {0}" -f $fullDomain) "INFO"
 Write-Log ("IntervalSec: {0}" -f $IntervalSec) "INFO"
