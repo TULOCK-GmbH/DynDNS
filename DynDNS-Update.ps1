@@ -1,4 +1,4 @@
-# Version: 1.9.0 (AutoUpdate + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging)
+# Version: 2.1.0 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging)
 
 param(
     [int]$IntervalSec = 60,
@@ -7,12 +7,15 @@ param(
     [int]$HealthEvery = 5,
 
     [switch]$UpdateNow,                      # run self-update immediately and exit
-    [switch]$AutoUpdate,                     # check for updates on start based on timestamp
+    [switch]$NoAutoUpdate,                   # opt-out: skip auto-update on start
     [int]$AutoUpdateHours = 24,              # minimum hours between auto-update checks
 
     [string]$UpdateInfoUrl = "",             # raw URL to version file (e.g. DynDNS-Update.version)
     [string]$UpdateScriptUrl = "",           # raw URL to script file (e.g. DynDNS-Update.ps1)
-    [string]$UpdateHashUrl = ""              # optional raw URL to SHA256 hash file (text containing hex)
+    [string]$UpdateHashUrl = "",             # optional raw URL to SHA256 hash file (text containing hex)
+
+    [switch]$MakeVersionFile,                # generate DynDNS-Update.version and exit
+    [string]$OutPath                         # optional output path for version file
 )
 
 # --- enforce TLS 1.2 ---
@@ -187,7 +190,6 @@ function Get-RemoteVersionFromInfo([string]$Url, [ref]$outText) {
 }
 function Parse-ExpectedHash([string]$versionText){
     if ([string]::IsNullOrWhiteSpace($versionText)) { return $null }
-    # accept "sha256=HEX" or just HEX on its own line
     if ($versionText -match '(?im)sha256\s*=\s*([0-9a-fA-F]{64})') { return $Matches[1].ToLower() }
     if ($versionText -match '(?im)^\s*([0-9a-fA-F]{64})\s*$')     { return $Matches[1].ToLower() }
     return $null
@@ -207,7 +209,6 @@ function Get-ExpectedHashFromUrl([string]$Url){
         $txt  = ($resp.Content | Out-String)
         $h = Parse-ExpectedHash $txt
         if ($h) { return $h }
-        # also accept common formats like "HEX  filename"
         if ($txt -match '(?im)^\s*([0-9a-fA-F]{64})\b') { return $Matches[1].ToLower() }
     } catch {
         Write-Log ("hash fetch failed: {0}" -f $_.Exception.Message) "ERROR"
@@ -240,7 +241,6 @@ function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
         return
     }
 
-    # expected hash: prefer from version text, else from hash URL
     $expectedHash = Parse-ExpectedHash $vText
     if (-not $expectedHash -and -not [string]::IsNullOrWhiteSpace($HashUrl)) {
         $expectedHash = Get-ExpectedHashFromUrl $HashUrl
@@ -253,7 +253,6 @@ function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
         $resp = Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -TimeoutSec 45 -ErrorAction Stop
         $remoteTxt = ($resp.Content | Out-String)
 
-        # compute and compare hash if available
         if ($expectedHash) {
             $actualHash = Compute-StringSHA256 $remoteTxt
             if ($actualHash -ne $expectedHash) {
@@ -263,7 +262,6 @@ function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
             Write-Log ("SHA256 verified: {0}" -f $actualHash) "INFO"
         }
 
-        # quick syntax check
         try { [void][ScriptBlock]::Create($remoteTxt) }
         catch {
             Write-Log ("downloaded script failed syntax check: {0}" -f $_.Exception.Message) "ERROR"
@@ -285,6 +283,48 @@ function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
     }
 }
 
+# --- MakeVersionFile: build DynDNS-Update.version from this script ---
+function Make-VersionFile {
+    param(
+        [string]$ScriptPath,
+        [string]$OutPath
+    )
+    try {
+        if (-not (Test-Path $ScriptPath -PathType Leaf)) {
+            throw "script not found: $ScriptPath"
+        }
+        if ([string]::IsNullOrWhiteSpace($OutPath)) {
+            $dir = Split-Path -Path $ScriptPath -Parent
+            $OutPath = Join-Path $dir "DynDNS-Update.version"
+        }
+
+        $content = Get-Content -Path $ScriptPath -Raw
+
+        $ver = $null
+        if ($content -match '(?m)^\s*#\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+)') { $ver = $Matches[1] }
+        if (-not $ver) { throw "no version header found in $ScriptPath" }
+
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($content)
+            $hash  = $sha.ComputeHash($bytes)
+            $hex   = -join ($hash | ForEach-Object { $_.ToString("x2") })
+        } finally { $sha.Dispose() }
+
+        $lines = @("version=$ver","sha256=$hex")
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($OutPath, ($lines -join [Environment]::NewLine), $utf8NoBom)
+
+        Write-Host "[INFO] wrote version file: $OutPath" -ForegroundColor Green
+        Write-Host "version=$ver"
+        Write-Host "sha256=$hex"
+    }
+    catch {
+        Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # create folders
 if (!(Test-Path $Install)) {
     Write-Host "=== creating folder structure ==="
@@ -293,7 +333,13 @@ if (!(Test-Path $Install)) {
     New-Item -ItemType Directory -Path (Join-Path $Install "Settings") -Force | Out-Null
 }
 
-# optional: UpdateNow (stores URLs from params; uses stored if empty)
+# MakeVersionFile path (generate version file and exit)
+if ($MakeVersionFile) {
+    Make-VersionFile -ScriptPath $selfPath -OutPath $OutPath
+    exit 0
+}
+
+# UpdateNow path (stores URLs from params; uses stored if empty)
 if ($UpdateNow) {
     $saved = $false
     if (-not [string]::IsNullOrWhiteSpace($UpdateInfoUrl))   { Protect-String $UpdateInfoUrl   | Set-Content -Path $infoUrlFile;   $saved = $true }
@@ -316,8 +362,8 @@ if ($UpdateNow) {
     return
 }
 
-# AutoUpdate on start (time-based)
-if ($AutoUpdate) {
+# === AutoUpdate on start (ALWAYS unless -NoAutoUpdate) ===
+if (-not $NoAutoUpdate) {
     $doCheck = $true
     if (Test-Path $autoStampFile) {
         try {
@@ -407,7 +453,7 @@ $url = "https://dynamicdns.key-systems.net/update.php?hostname=$fullDomain&passw
 
 # startup logging
 Write-Log "=== DynDNS Monitor START ===" "INFO"
-Write-Log ("Version: {0}" -f "1.9.0") "INFO"
+Write-Log ("Version: {0}" -f "2.1.0") "INFO"
 Write-Log ("Script: {0}" -f $selfPath) "INFO"
 Write-Log ("Domain: {0}" -f $fullDomain) "INFO"
 Write-Log ("IntervalSec: {0}" -f $IntervalSec) "INFO"
@@ -492,17 +538,4 @@ try {
         try { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") | Set-Content $heartbeatFile } catch {}
 
         # health log
-        if ($loopCount % $HealthEvery -eq 0) {
-            Write-Log ("HEALTH: Domain={0}, IP={1}, DNS={2}" -f $fullDomain, $currentIP, $dnsAIP) "INFO"
-        }
-
-        # vars for stop log
-        $lastIP = $currentIP
-        $lastDNS = $dnsAIP
-
-        Start-Sleep -Seconds $IntervalSec
-    }
-}
-finally {
-    Write-Log ("=== DynDNS Monitor STOP === Domain={0}, lastIP={1}, lastDNS={2}" -f $fullDomain, $lastIP, $lastDNS) "INFO"
-}
+        if ($loopCount
