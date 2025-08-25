@@ -13,7 +13,7 @@ echo ========================================
 setlocal
 
 :: ====== Installer (dieses Skript) – Version & Self-Update-Quellen ======
-set "InstallerVersion=1.4"
+set "InstallerVersion=1.4.1"
 :: Anpassen auf dein Repo/Pfade:
 set "InstallerVersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "InstallerScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
