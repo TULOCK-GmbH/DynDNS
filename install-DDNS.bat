@@ -1,20 +1,19 @@
+@echo off
 echo.
 echo ========================================
 echo  DynDNS-Update Service Manager gestartet
 echo ========================================
 
-@echo off
 :: ===============================================
 :: DynDNS-Update Service Manager Batch Script
-:: Version: 1.4 (2025-08-25)
+:: Version: 1.4.2 (2025-08-25)
 :: (C) 2025 Joerg Wannemacher. Alle Rechte vorbehalten.
 :: Nutzung und Weitergabe nur mit Erlaubnis des Autors.
 :: ===============================================
 setlocal
 
 :: ====== Installer (dieses Skript) – Version & Self-Update-Quellen ======
-set "InstallerVersion=1.4.1"
-:: Anpassen auf dein Repo/Pfade:
+set "InstallerVersion=1.4.2"
 set "InstallerVersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "InstallerScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
@@ -38,7 +37,7 @@ net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Starte Skript mit Administratorrechten neu...
     powershell -Command "Start-Process '%~f0' -Verb runAs"
-    exit /b
+    goto :eof
 )
 
 :: =======================================================================
@@ -84,7 +83,7 @@ if defined RemoteInstallerVersion (
             >>"%Updater%" echo ping 127.0.0.1 -n 2 ^>nul
             >>"%Updater%" echo goto :^retry
             start "" "%Updater%"
-            exit /b
+            goto :eof
         ) else (
             echo [FEHLER] Installer-Update konnte nicht heruntergeladen werden. Fahre ohne Update fort.
         )
@@ -100,19 +99,19 @@ if not exist "%PsExec%" (
     echo [FEHLER] PsExec wurde nicht gefunden unter: %PsExec%
     echo Bitte installieren Sie PsExec im Tools-Verzeichnis.
     pause
-    exit /b 1
+    goto :eof
 )
 if not exist "%NSSM%" (
     echo [FEHLER] NSSM wurde nicht gefunden unter: %NSSM%
     echo Bitte installieren Sie NSSM im Tools-Verzeichnis.
     pause
-    exit /b 1
+    goto :eof
 )
 if not exist "%Script%" (
     echo [FEHLER] PowerShell-Script nicht gefunden: %Script%
     echo Bitte stellen Sie sicher, dass das DynDNS-Update.ps1 Script vorhanden ist.
     pause
-    exit /b 1
+    goto :eof
 )
 
 :: ====== Ordnererstellung ======
@@ -132,7 +131,7 @@ if %errorlevel%==0 set "DienstExistiert=1"
 :MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V1.4
+echo      DynDNS-Update Service Manager V1.4a
 echo ========================================
 
 if "%DienstExistiert%"=="1" goto DIENST_EXISTIERT
@@ -218,7 +217,7 @@ echo Installiere/ersetze Dienst...
 if %errorlevel% neq 0 (
     echo [FEHLER] Service-Installation mit NSSM fehlgeschlagen!
     pause
-    exit /b 1
+    goto :eof
 )
 
 :: ====== Service-Konfiguration ======
@@ -238,7 +237,7 @@ if %errorlevel% neq 0 (
     echo [FEHLER] Service konnte nicht gestartet werden!
     echo Pruefe die Logs unter: %Logdir%
     pause
-    exit /b 1
+    goto :eof
 )
 goto CHECK
 
@@ -272,7 +271,7 @@ net stop %Service% >nul 2>&1
 if %errorlevel% neq 0 (
     echo [FEHLER] Service-Deinstallation fehlgeschlagen!
     pause
-    exit /b 1
+    goto :eof
 )
 goto CHECKDEL
 
@@ -306,7 +305,6 @@ pause
 goto MENU
 
 :CHECK
-:: Dienststatus erneut pruefen und melden
 echo Warte 3 Sekunden auf Service-Start...
 timeout /t 3 >nul
 sc query "%Service%" | find "RUNNING" >nul
@@ -320,7 +318,6 @@ if %errorlevel%==0 (
 goto ENDE
 
 :CHECKDEL
-:: Dienststatus erneut pruefen
 sc query "%Service%" >nul 2>&1
 if %errorlevel%==0 (
     echo [FEHLER] Dienst '%Service%' wurde nicht vollstaendig geloescht!
@@ -334,4 +331,4 @@ goto ENDE
 echo.
 echo Script beendet. Druecken Sie eine Taste...
 pause
-exit /b
+goto :eof
