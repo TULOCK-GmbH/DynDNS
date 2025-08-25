@@ -1,4 +1,4 @@
-# Version: 2.1.0 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging)
+# Version: 2.1.1 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging) 
 
 param(
     [int]$IntervalSec = 60,
@@ -453,7 +453,7 @@ $url = "https://dynamicdns.key-systems.net/update.php?hostname=$fullDomain&passw
 
 # startup logging
 Write-Log "=== DynDNS Monitor START ===" "INFO"
-Write-Log ("Version: {0}" -f "2.1.0") "INFO"
+Write-Log ("Version: {0}" -f "2.1.1") "INFO"
 Write-Log ("Script: {0}" -f $selfPath) "INFO"
 Write-Log ("Domain: {0}" -f $fullDomain) "INFO"
 Write-Log ("IntervalSec: {0}" -f $IntervalSec) "INFO"
@@ -508,7 +508,9 @@ try {
                 $dnsEntry = Resolve-DnsName $fullDomain -Type A -Server $dnsServer -ErrorAction Stop
                 $dnsAIP = ($dnsEntry | Where-Object { $_.QueryType -eq 'A' } | Select-Object -First 1).IPAddress
                 if (Test-IPv4 $dnsAIP) { break }
-            } catch { continue }
+            } catch {
+                continue
+            }
         }
 
         if (-not $dnsAIP) {
@@ -538,4 +540,13 @@ try {
         try { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") | Set-Content $heartbeatFile } catch {}
 
         # health log
-        if ($loopCount
+        if ($loopCount % $HealthEvery -eq 0) {
+            Write-Log ("HEALTH: Domain={0}, IP={1}, DNS={2}" -f $fullDomain, $currentIP, $dnsAIP) "INFO"
+        }
+
+        Start-Sleep -Seconds $IntervalSec
+    }
+}
+finally {
+    Write-Log ("=== DynDNS Monitor STOP === Domain={0}, lastIP={1}, lastDNS={2}" -f $fullDomain, $lastIP, $lastDNS) "INFO"
+}
