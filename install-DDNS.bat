@@ -6,17 +6,17 @@ echo ========================================
 @echo off
 :: ===============================================
 :: DynDNS-Update Service Manager Batch Script
-:: Version: 1.5 (2025-08-25)
+:: Version: 1.4 (2025-08-25)
 :: (C) 2025 Joerg Wannemacher. Alle Rechte vorbehalten.
 :: Nutzung und Weitergabe nur mit Erlaubnis des Autors.
 :: ===============================================
 setlocal
 
 :: ====== Installer (dieses Skript) – Version & Self-Update-Quellen ======
-set "InstallerVersion=1.5.1"
-:: Bitte auf deine Repo-Pfade anpassen:
-set "InstallerVersionUrl=https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/install_ddns.version"
-set "InstallerScriptUrl=https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/install_ddns.bat"
+set "InstallerVersion=1.4"
+:: Anpassen auf dein Repo/Pfade:
+set "InstallerVersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
+set "InstallerScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
 :: ====== Basispfade / Variablen ======
 set "Maindir=C:\SYS\DynDNS"
@@ -29,9 +29,9 @@ set "NSSM=%Toolsdir%\nssm.exe"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "Service=DynDNS-Update"
 
-:: ====== Update-Quellen für DynDNS-Update.ps1 ======
-set "UpdateInfoUrl=https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/DynDNS-Update.version"
-set "UpdateScriptUrl=https://raw.githubusercontent.com/Home-Netz/DynDNS-Updater/main/DynDNS-Update.ps1"
+:: Optionale Update-Quellen (für -UpdateNow)
+set "UpdateInfoUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.version"
+set "UpdateScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.ps1"
 
 :: ====== Adminrechte pruefen ======
 net session >nul 2>&1
@@ -42,7 +42,7 @@ if %errorlevel% neq 0 (
 )
 
 :: =======================================================================
-:: SELF-UPDATE BLOCK (fuer diese install_ddns.bat)
+:: SELF-UPDATE BLOCK (fuer diese install_ddns.bat) - laeuft direkt beim Start
 :: =======================================================================
 set "SelfPath=%~f0"
 set "SelfName=%~nx0"
@@ -52,24 +52,25 @@ set "Updater=%TEMP%\update_%RANDOM%_%RANDOM%.cmd"
 echo.
 echo [INFO] Pruefe auf neuere Version des Installers...
 
-for /f "usebackq tokens=*" %%v in (`powershell -NoProfile -Command ^
-  "try{ (Invoke-WebRequest -UseBasicParsing -Uri '%InstallerVersionUrl%' -TimeoutSec 10).Content.Trim() }catch{''}"`) do set "RemoteInstallerVersion=%%v"
+for /f "usebackq tokens=*" %%v in (`
+  powershell -NoProfile -Command "try{ (Invoke-WebRequest -UseBasicParsing -Uri '%InstallerVersionUrl%' -TimeoutSec 12).Content.Trim() }catch{''}"
+`) do set "RemoteInstallerVersion=%%v"
 
-if not defined RemoteInstallerVersion (
-    echo [WARNUNG] Konnte Remote-Installer-Version nicht abrufen.
-) else (
+if defined RemoteInstallerVersion (
     echo Installer lokal : %InstallerVersion%
     echo Installer remote: %RemoteInstallerVersion%
+
     powershell -NoProfile -Command ^
       "$v1=[Version]'%InstallerVersion%'; $v2=[Version]'%RemoteInstallerVersion%'; if($v2 -gt $v1){exit 1}else{exit 0}"
     if errorlevel 1 (
         echo [INFO] Neuere Installer-Version gefunden. Lade Update...
         del /f /q "%TmpNew%" >nul 2>&1
         powershell -NoProfile -Command ^
-          "Invoke-WebRequest -UseBasicParsing -Uri '%InstallerScriptUrl%' -OutFile '%TmpNew%' -TimeoutSec 20"
+          "Invoke-WebRequest -UseBasicParsing -Uri '%InstallerScriptUrl%' -OutFile '%TmpNew%' -TimeoutSec 25"
+
         if exist "%TmpNew%" (
-            echo [OK] Installer-Update geladen. Fuehre Self-Replace aus...
-            rem Updater-Stub schreiben (wartet kurz, ersetzt Datei, startet neu, raeumt auf)
+            echo [OK] Installer-Update geladen. Ersetze Datei und starte neu...
+            rem Updater-Stub: wartet kurz, ersetzt Datei, startet neu, raeumt sich auf
             >"%Updater%" echo @echo off
             >>"%Updater%" echo setlocal
             >>"%Updater%" echo ping 127.0.0.1 -n 2 ^>nul
@@ -85,11 +86,13 @@ if not defined RemoteInstallerVersion (
             start "" "%Updater%"
             exit /b
         ) else (
-            echo [FEHLER] Installer-Update konnte nicht heruntergeladen werden.
+            echo [FEHLER] Installer-Update konnte nicht heruntergeladen werden. Fahre ohne Update fort.
         )
     ) else (
         echo [OK] Installer ist aktuell.
     )
+) else (
+    echo [WARNUNG] Konnte Remote-Installer-Version nicht abrufen. Fahre ohne Update fort.
 )
 
 :: ====== Tools und Script pruefen ======
@@ -129,7 +132,7 @@ if %errorlevel%==0 set "DienstExistiert=1"
 :MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V1.5
+echo      DynDNS-Update Service Manager V1.4
 echo ========================================
 
 if "%DienstExistiert%"=="1" goto DIENST_EXISTIERT
@@ -194,9 +197,9 @@ if %PsExecResult% neq 0 (
     echo [WARNUNG] PsExec wurde mit Fehler beendet. Installation wird fortgesetzt...
 )
 
-:: ====== Update-Check (DynDNS-Update.ps1 vor der Dienstinstallation) ======
+:: ====== Update-Check (vor der Dienstinstallation) ======
 echo.
-echo Fuehre Update-Check fuer DynDNS-Update.ps1 durch...
+echo Fuehre Update-Check durch...
 "%PS%" -ExecutionPolicy Bypass -NoProfile -File "%Script%" -UpdateNow ^
   -UpdateInfoUrl   "%UpdateInfoUrl%" ^
   -UpdateScriptUrl "%UpdateScriptUrl%"
