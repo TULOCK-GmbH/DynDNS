@@ -1,12 +1,18 @@
-# Version: 1.7.0 (LocalMachine DPAPI + GitHub Self-Update + Health-Log + safe Stop-Logging)
+# Version: 1.9.0 (AutoUpdate + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging)
 
 param(
     [int]$IntervalSec = 60,
     [int]$LogMaxSizeMB = 10,
     [switch]$NoPing,
     [int]$HealthEvery = 5,
-    [switch]$UpdateNow,                 # trigger self-update and exit
-    [string]$GitHubRawUrl = ""          # raw URL to this script in GitHub (e.g. https://raw.githubusercontent.com/<org>/<repo>/main/dyndns_tulock.ps1)
+
+    [switch]$UpdateNow,                      # run self-update immediately and exit
+    [switch]$AutoUpdate,                     # check for updates on start based on timestamp
+    [int]$AutoUpdateHours = 24,              # minimum hours between auto-update checks
+
+    [string]$UpdateInfoUrl = "",             # raw URL to version file (e.g. DynDNS-Update.version)
+    [string]$UpdateScriptUrl = "",           # raw URL to script file (e.g. DynDNS-Update.ps1)
+    [string]$UpdateHashUrl = ""              # optional raw URL to SHA256 hash file (text containing hex)
 )
 
 # --- enforce TLS 1.2 ---
@@ -17,14 +23,17 @@ if ($PSScriptRoot) { $selfPath = Join-Path $PSScriptRoot ($MyInvocation.MyComman
 else { $selfPath = $MyInvocation.MyCommand.Path }
 
 # locations
-$Install        = "C:\SYS\DynDNS"
-$settingsFile   = "$Install\Settings\dyndns_settings.txt"
-$pwFile         = "$Install\Settings\dyndns_password.txt"   # now stores Base64(ProtectedData LocalMachine)
-$ghUrlFile      = "$Install\Settings\github_url.sec"        # now stores Base64(ProtectedData LocalMachine)
-$ipFile         = "$Install\Logs\old_ip.txt"
-$heartbeatFile  = "$Install\Logs\heartbeat.txt"
-$logFile        = "$Install\Logs\ip_monitor.log"
-$updateLogFile  = "$Install\Logs\dyndns_update.log"
+$Install          = "C:\SYS\DynDNS"
+$settingsFile     = "$Install\Settings\dyndns_settings.txt"
+$pwFile           = "$Install\Settings\dyndns_password.txt"     # Base64(ProtectedData LocalMachine)
+$infoUrlFile      = "$Install\Settings\github_infourl.sec"      # Base64(ProtectedData LocalMachine)
+$scriptUrlFile    = "$Install\Settings\github_scripturl.sec"    # Base64(ProtectedData LocalMachine)
+$hashUrlFile      = "$Install\Settings\github_hashurl.sec"      # Base64(ProtectedData LocalMachine)
+$autoStampFile    = "$Install\Settings\autoupdate_lastcheck.txt"
+$ipFile           = "$Install\Logs\old_ip.txt"
+$heartbeatFile    = "$Install\Logs\heartbeat.txt"
+$logFile          = "$Install\Logs\ip_monitor.log"
+$updateLogFile    = "$Install\Logs\dyndns_update.log"
 
 # IP services
 $ipServices = @(
@@ -43,6 +52,7 @@ if ($IntervalSec -lt 10)   { Write-Host "IntervalSec < 10s, set to 10s." -Foregr
 if ($IntervalSec -gt 86400){ Write-Host "IntervalSec > 86400s, set to 86400s." -ForegroundColor Yellow; $IntervalSec = 86400 }
 if ($LogMaxSizeMB -lt 1)   { Write-Host "LogMaxSizeMB < 1, set to 1 MB." -ForegroundColor Yellow; $LogMaxSizeMB = 1 }
 if ($HealthEvery -lt 1)    { Write-Host "HealthEvery < 1, set to 1." -ForegroundColor Yellow; $HealthEvery = 1 }
+if ($AutoUpdateHours -lt 1){ $AutoUpdateHours = 1 }
 
 # IPv4 test
 function Test-IPv4([string]$ip) {
@@ -95,46 +105,64 @@ function Unprotect-String([string]$b64){
     return [Text.Encoding]::UTF8.GetString($bytes)
 }
 
-# --- encrypted GitHub URL helpers (LocalMachine DPAPI) ---
-function Set-GitHubUrl {
-    param([string]$Url)
+# --- encrypted update URLs (info + script + optional hash) ---
+function Set-UpdateUrls {
+    param(
+        [string]$InfoUrl,
+        [string]$ScriptUrl,
+        [string]$HashUrl
+    )
+    if ([string]::IsNullOrWhiteSpace($InfoUrl))   { $InfoUrl   = Read-Host "enter GitHub raw URL to version file (e.g. DynDNS-Update.version)" }
+    if ([string]::IsNullOrWhiteSpace($ScriptUrl)) { $ScriptUrl = Read-Host "enter GitHub raw URL to script (e.g. DynDNS-Update.ps1)" }
+    if ([string]::IsNullOrWhiteSpace($HashUrl))   { $HashUrl   = Read-Host "optional: raw URL to SHA256 file (press Enter to skip)" }
 
-    if ([string]::IsNullOrWhiteSpace($Url)) {
-        $Url = Read-Host "enter GitHub raw URL"
-    }
-    if ([string]::IsNullOrWhiteSpace($Url)) {
-        Write-Log "no URL provided." "WARN"
+    if ([string]::IsNullOrWhiteSpace($InfoUrl) -or [string]::IsNullOrWhiteSpace($ScriptUrl)) {
+        Write-Log "missing URL(s)." "WARN"
         return
     }
     try {
-        $enc = Protect-String $Url
-        $enc | Set-Content -Path $ghUrlFile
-        Write-Log "GitHub URL saved (machine-bound encrypted)." "INFO"
-    } catch {
-        Write-Log ("failed to save GitHub URL: {0}" -f $_.Exception.Message) "ERROR"
-    }
-}
-function Get-GitHubUrl {
-    if (Test-Path $ghUrlFile) {
-        try {
-            $b64 = Get-Content $ghUrlFile -Raw
-            return Unprotect-String $b64
-        } catch {
-            Write-Log ("failed to load GitHub URL: {0}" -f $_.Exception.Message) "ERROR"
+        Protect-String $InfoUrl   | Set-Content -Path $infoUrlFile
+        Protect-String $ScriptUrl | Set-Content -Path $scriptUrlFile
+        if (-not [string]::IsNullOrWhiteSpace($HashUrl)) {
+            Protect-String $HashUrl | Set-Content -Path $hashUrlFile
         }
-    }
-    return $null
-}
-function Delete-GitHubUrl {
-    try {
-        if (Test-Path $ghUrlFile) { Remove-Item $ghUrlFile -Force }
-        Write-Log "GitHub URL removed." "INFO"
+        Write-Log "update URLs saved (machine-bound encrypted)." "INFO"
     } catch {
-        Write-Log ("failed to remove GitHub URL: {0}" -f $_.Exception.Message) "ERROR"
+        Write-Log ("failed to save update URLs: {0}" -f $_.Exception.Message) "ERROR"
+    }
+}
+function Get-UpdateUrls {
+    $info = $null; $script = $null; $hash = $null
+    if (Test-Path $infoUrlFile)   { try { $info   = Unprotect-String (Get-Content $infoUrlFile   -Raw) } catch { Write-Log "failed to read info URL." "ERROR" } }
+    if (Test-Path $scriptUrlFile) { try { $script = Unprotect-String (Get-Content $scriptUrlFile -Raw) } catch { Write-Log "failed to read script URL." "ERROR" } }
+    if (Test-Path $hashUrlFile)   { try { $hash   = Unprotect-String (Get-Content $hashUrlFile   -Raw) } catch { Write-Log "failed to read hash URL." "ERROR" } }
+    return [pscustomobject]@{ InfoUrl = $info; ScriptUrl = $script; HashUrl = $hash }
+}
+function Delete-UpdateUrls {
+    try {
+        if (Test-Path $infoUrlFile)   { Remove-Item $infoUrlFile   -Force }
+        if (Test-Path $scriptUrlFile) { Remove-Item $scriptUrlFile -Force }
+        if (Test-Path $hashUrlFile)   { Remove-Item $hashUrlFile   -Force }
+        Write-Log "update URLs removed." "INFO"
+    } catch {
+        Write-Log ("failed to remove update URLs: {0}" -f $_.Exception.Message) "ERROR"
     }
 }
 
-# --- GitHub self-update helpers ---
+# --- DynDNS password (machine-bound) ---
+function Save-Password([string]$plainPw){
+    $encPw = Protect-String $plainPw
+    $encPw | Set-Content $pwFile
+    Write-Log "DynDNS password saved (machine-bound encrypted)." "INFO"
+}
+function Load-Password(){
+    $encPw = Get-Content $pwFile -ErrorAction Stop -Raw
+    $plain = Unprotect-String $encPw
+    if ([string]::IsNullOrWhiteSpace($plain)) { throw "password decrypt returned empty string" }
+    return $plain
+}
+
+# --- version/hash helpers ---
 function Get-LocalVersion {
     try {
         $content = Get-Content -Path $selfPath -Raw -ErrorAction Stop
@@ -144,12 +172,12 @@ function Get-LocalVersion {
     } catch {}
     return [version]"0.0.0"
 }
-function Get-RemoteVersion([string]$Url, [ref]$remoteContent) {
+function Get-RemoteVersionFromInfo([string]$Url, [ref]$outText) {
     try {
         $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
         $txt  = ($resp.Content | Out-String)
-        $remoteContent.Value = $txt
-        if ($txt -match '(?m)^#\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+        $outText.Value = $txt
+        if ($txt -match '([0-9]+\.[0-9]+\.[0-9]+)') {
             return [version]$Matches[1]
         }
     } catch {
@@ -157,23 +185,54 @@ function Get-RemoteVersion([string]$Url, [ref]$remoteContent) {
     }
     return $null
 }
-function Self-Update([string]$Url) {
-    if ([string]::IsNullOrWhiteSpace($Url)) {
-        Write-Log "GitHubRawUrl is empty. Set -GitHubRawUrl or call Set-GitHubUrl." "ERROR"
+function Parse-ExpectedHash([string]$versionText){
+    if ([string]::IsNullOrWhiteSpace($versionText)) { return $null }
+    # accept "sha256=HEX" or just HEX on its own line
+    if ($versionText -match '(?im)sha256\s*=\s*([0-9a-fA-F]{64})') { return $Matches[1].ToLower() }
+    if ($versionText -match '(?im)^\s*([0-9a-fA-F]{64})\s*$')     { return $Matches[1].ToLower() }
+    return $null
+}
+function Compute-StringSHA256([string]$text){
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+        $hash  = $sha.ComputeHash($bytes)
+        -join ($hash | ForEach-Object { $_.ToString("x2") })
+    } finally { $sha.Dispose() }
+}
+function Get-ExpectedHashFromUrl([string]$Url){
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
+    try {
+        $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        $txt  = ($resp.Content | Out-String)
+        $h = Parse-ExpectedHash $txt
+        if ($h) { return $h }
+        # also accept common formats like "HEX  filename"
+        if ($txt -match '(?im)^\s*([0-9a-fA-F]{64})\b') { return $Matches[1].ToLower() }
+    } catch {
+        Write-Log ("hash fetch failed: {0}" -f $_.Exception.Message) "ERROR"
+    }
+    return $null
+}
+
+# --- self update using info+script (+ optional hash) ---
+function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
+    if ([string]::IsNullOrWhiteSpace($InfoUrl) -or [string]::IsNullOrWhiteSpace($ScriptUrl)) {
+        Write-Log "update URLs are empty. Set them via -UpdateInfoUrl/-UpdateScriptUrl or Set-UpdateUrls." "ERROR"
         return
     }
-    Write-Log ("self-update: checking {0}" -f $Url) "INFO"
+    Write-Log ("self-update: info={0}" -f $InfoUrl) "INFO"
+    Write-Log ("self-update: script={0}" -f $ScriptUrl) "INFO"
+    if (-not [string]::IsNullOrWhiteSpace($HashUrl)) { Write-Log ("self-update: hash={0}" -f $HashUrl) "INFO" }
 
-    $localVer  = Get-LocalVersion
-    $remoteTxt = ""
-    $refRemote = [ref]$remoteTxt
-    $remoteVer = Get-RemoteVersion -Url $Url -remoteContent $refRemote
-
+    $localVer = Get-LocalVersion
+    $vText = ""
+    $refV  = [ref]$vText
+    $remoteVer = Get-RemoteVersionFromInfo -Url $InfoUrl -outText $refV
     if (-not $remoteVer) {
         Write-Log "could not read remote version" "ERROR"
         return
     }
-
     Write-Log ("local version: {0} / remote version: {1}" -f $localVer, $remoteVer) "INFO"
 
     if ($remoteVer -le $localVer) {
@@ -181,18 +240,38 @@ function Self-Update([string]$Url) {
         return
     }
 
-    try {
-        $tmp = [System.IO.Path]::GetTempFileName()
-        Set-Content -Path $tmp -Value $remoteTxt -Encoding UTF8
+    # expected hash: prefer from version text, else from hash URL
+    $expectedHash = Parse-ExpectedHash $vText
+    if (-not $expectedHash -and -not [string]::IsNullOrWhiteSpace($HashUrl)) {
+        $expectedHash = Get-ExpectedHashFromUrl $HashUrl
+    }
+    if (-not $expectedHash) {
+        Write-Log "no expected hash found. proceeding without hash verification." "WARN"
+    }
 
-        # quick syntax check of downloaded script
-        try {
-            [void][ScriptBlock]::Create((Get-Content $tmp -Raw))
-        } catch {
+    try {
+        $resp = Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -TimeoutSec 45 -ErrorAction Stop
+        $remoteTxt = ($resp.Content | Out-String)
+
+        # compute and compare hash if available
+        if ($expectedHash) {
+            $actualHash = Compute-StringSHA256 $remoteTxt
+            if ($actualHash -ne $expectedHash) {
+                Write-Log ("SHA256 mismatch. expected={0} actual={1}" -f $expectedHash, $actualHash) "ERROR"
+                return
+            }
+            Write-Log ("SHA256 verified: {0}" -f $actualHash) "INFO"
+        }
+
+        # quick syntax check
+        try { [void][ScriptBlock]::Create($remoteTxt) }
+        catch {
             Write-Log ("downloaded script failed syntax check: {0}" -f $_.Exception.Message) "ERROR"
-            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             return
         }
+
+        $tmp = [System.IO.Path]::GetTempFileName()
+        Set-Content -Path $tmp -Value $remoteTxt -Encoding UTF8
 
         $backup = "$selfPath.bak_{0:yyyyMMdd_HHmmss}" -f (Get-Date)
         Copy-Item -Path $selfPath -Destination $backup -Force
@@ -214,25 +293,55 @@ if (!(Test-Path $Install)) {
     New-Item -ItemType Directory -Path (Join-Path $Install "Settings") -Force | Out-Null
 }
 
-# optional: run self-update and exit
+# optional: UpdateNow (stores URLs from params; uses stored if empty)
 if ($UpdateNow) {
-    # persist once if provided via parameter
-    if (-not (Test-Path $ghUrlFile) -and -not [string]::IsNullOrWhiteSpace($GitHubRawUrl)) {
-        Set-GitHubUrl -Url $GitHubRawUrl
-    }
-    $urlToUse = $GitHubRawUrl
-    if ([string]::IsNullOrWhiteSpace($urlToUse)) {
-        $urlToUse = Get-GitHubUrl
-    }
-    if ([string]::IsNullOrWhiteSpace($urlToUse)) {
-        Write-Host "no GitHub URL provided or stored. set it with:" -ForegroundColor Yellow
-        Write-Host "  -GitHubRawUrl <url> -UpdateNow     (one-time)" -ForegroundColor Yellow
-        Write-Host "or persist it:" -ForegroundColor Yellow
-        Write-Host "  call Set-GitHubUrl                 (interactive)" -ForegroundColor Yellow
+    $saved = $false
+    if (-not [string]::IsNullOrWhiteSpace($UpdateInfoUrl))   { Protect-String $UpdateInfoUrl   | Set-Content -Path $infoUrlFile;   $saved = $true }
+    if (-not [string]::IsNullOrWhiteSpace($UpdateScriptUrl)) { Protect-String $UpdateScriptUrl | Set-Content -Path $scriptUrlFile; $saved = $true }
+    if (-not [string]::IsNullOrWhiteSpace($UpdateHashUrl))   { Protect-String $UpdateHashUrl   | Set-Content -Path $hashUrlFile }
+    if ($saved) { Write-Log "update URLs saved from parameters (machine-bound encrypted)." "INFO" }
+
+    $urls = Get-UpdateUrls
+    $infoUrl   = $UpdateInfoUrl;   if ([string]::IsNullOrWhiteSpace($infoUrl))   { $infoUrl   = $urls.InfoUrl }
+    $scriptUrl = $UpdateScriptUrl; if ([string]::IsNullOrWhiteSpace($scriptUrl)) { $scriptUrl = $urls.ScriptUrl }
+    $hashUrl   = $UpdateHashUrl;   if ([string]::IsNullOrWhiteSpace($hashUrl))   { $hashUrl   = $urls.HashUrl }
+
+    if ([string]::IsNullOrWhiteSpace($infoUrl) -or [string]::IsNullOrWhiteSpace($scriptUrl)) {
+        Write-Host "no update URLs provided or stored. set them with:" -ForegroundColor Yellow
+        Write-Host "  -UpdateInfoUrl <url> -UpdateScriptUrl <url> -UpdateNow" -ForegroundColor Yellow
+        Write-Host "or persist them interactively:  Set-UpdateUrls" -ForegroundColor Yellow
         return
     }
-    Self-Update -Url $urlToUse
+    Self-Update -InfoUrl $infoUrl -ScriptUrl $scriptUrl -HashUrl $hashUrl
     return
+}
+
+# AutoUpdate on start (time-based)
+if ($AutoUpdate) {
+    $doCheck = $true
+    if (Test-Path $autoStampFile) {
+        try {
+            $stamp = Get-Content $autoStampFile -Raw | Get-Date
+            $hours = (New-TimeSpan -Start $stamp -End (Get-Date)).TotalHours
+            if ($hours -lt $AutoUpdateHours) { $doCheck = $false }
+        } catch {}
+    }
+    if ($doCheck) {
+        $urls = Get-UpdateUrls
+        $infoUrl   = if ([string]::IsNullOrWhiteSpace($UpdateInfoUrl))   { $urls.InfoUrl }   else { $UpdateInfoUrl }
+        $scriptUrl = if ([string]::IsNullOrWhiteSpace($UpdateScriptUrl)) { $urls.ScriptUrl } else { $UpdateScriptUrl }
+        $hashUrl   = if ([string]::IsNullOrWhiteSpace($UpdateHashUrl))   { $urls.HashUrl }   else { $UpdateHashUrl }
+
+        if (-not [string]::IsNullOrWhiteSpace($infoUrl) -and -not [string]::IsNullOrWhiteSpace($scriptUrl)) {
+            Write-Log ("AutoUpdate check (period {0}h)..." -f $AutoUpdateHours) "INFO"
+            Self-Update -InfoUrl $infoUrl -ScriptUrl $scriptUrl -HashUrl $hashUrl
+            (Get-Date).ToString("o") | Set-Content $autoStampFile
+        } else {
+            Write-Log "AutoUpdate skipped: URLs not set." "WARN"
+        }
+    } else {
+        Write-Log "AutoUpdate skipped: period not reached." "INFO"
+    }
 }
 
 # initialization (first run)
@@ -262,14 +371,7 @@ if (!(Test-Path $settingsFile) -or !(Test-Path $pwFile)) {
     $subdomain | Set-Content $settingsFile
 
     # save password with LocalMachine DPAPI
-    try {
-        $encPw = Protect-String $plainPw
-        $encPw | Set-Content $pwFile
-        Write-Log "DynDNS password saved (machine-bound encrypted)." "INFO"
-    } catch {
-        Write-Log ("failed to save password: {0}" -f $_.Exception.Message) "ERROR"
-        exit 1
-    }
+    try { Save-Password $plainPw } catch { Write-Log ("failed to save password: {0}" -f $_.Exception.Message) "ERROR"; exit 1 }
 
     Write-Host "settings saved." -ForegroundColor Green
     Write-Log "DynDNS initialized." "INFO"
@@ -283,18 +385,15 @@ try {
     Write-Log "ERROR loading settings file: $_" "ERROR"
     exit 1
 }
-
 try {
-    $encPw = Get-Content $pwFile -ErrorAction Stop -Raw
-    $plainPassword = Unprotect-String $encPw
-    if ([string]::IsNullOrWhiteSpace($plainPassword)) { throw "password decrypt returned empty string" }
+    $plainPassword = Load-Password
 } catch {
     Write-Log "password decrypt failed. prompting for reset..." "WARN"
     try {
         $pw = Read-Host "enter DynDNS password (will be re-saved machine-bound)" -AsSecureString
         $plainPw = [System.Net.NetworkCredential]::new("", $pw).Password
         if ($plainPw.Length -lt 6) { throw "password too short." }
-        Protect-String $plainPw | Set-Content $pwFile
+        Save-Password $plainPw
         $plainPassword = $plainPw
         Write-Log "password re-saved (machine-bound)." "INFO"
     } catch {
@@ -308,7 +407,7 @@ $url = "https://dynamicdns.key-systems.net/update.php?hostname=$fullDomain&passw
 
 # startup logging
 Write-Log "=== DynDNS Monitor START ===" "INFO"
-Write-Log ("Version: {0}" -f "1.7.0") "INFO"
+Write-Log ("Version: {0}" -f "1.9.0") "INFO"
 Write-Log ("Script: {0}" -f $selfPath) "INFO"
 Write-Log ("Domain: {0}" -f $fullDomain) "INFO"
 Write-Log ("IntervalSec: {0}" -f $IntervalSec) "INFO"
@@ -406,4 +505,4 @@ try {
 }
 finally {
     Write-Log ("=== DynDNS Monitor STOP === Domain={0}, lastIP={1}, lastDNS={2}" -f $fullDomain, $lastIP, $lastDNS) "INFO"
-} 
+}
