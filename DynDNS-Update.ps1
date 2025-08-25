@@ -1,4 +1,4 @@
-# Version: 2.1.1 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging) 
+# Version: 2.1.2 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging) 
 
 param(
     [int]$IntervalSec = 60,
