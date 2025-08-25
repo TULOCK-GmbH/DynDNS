@@ -406,4 +406,4 @@ try {
 }
 finally {
     Write-Log ("=== DynDNS Monitor STOP === Domain={0}, lastIP={1}, lastDNS={2}" -f $fullDomain, $lastIP, $lastDNS) "INFO"
-}
+} 
