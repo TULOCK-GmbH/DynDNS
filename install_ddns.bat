@@ -2,10 +2,11 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM =========================================================
-REM  install_DDNS.bat – v1.2.1
+REM  install_DDNS.bat – v1.2.2
 REM  Self-Update (VBS) + DynDNS Service Manager
 REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
+
 
 REM =================== Basis-Pfade ===================
 set "Maindir=C:\SYS\DynDNS"
@@ -16,7 +17,7 @@ REM Haupt-Installer-Log (Service-Manager Aktionen)
 set "INST_Log=%Logdir%\install_ddns_installer.log"
 
 REM =================== Self-Update Config ===================
-set "InstallerVersion=1.2.1"
+set "InstallerVersion=1.2.2"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
@@ -30,14 +31,18 @@ set "UpdaterVbs=%Logdir%\%SelfName%_upd.vbs"
 set "SU_Log=%Logdir%\install_ddns_update.log"
 
 call :LOG "--- BOOT --- start %SelfName% v=%InstallerVersion%"
+call :LOG_VERSION
+
 
 REM ===== Self-Update: Restart nach Update? -> einmalig ueberspringen
 if exist "%RestartFlag%" (
   del /q "%RestartFlag%" >nul 2>&1
   >>"%SU_Log%" echo [%date% %time%] RESTART_SKIP
   call :LOG "SelfUpdate: RESTART_SKIP (Updateblock uebersprungen)"
+  call :LOG_VERSION
   goto :AFTER_SELFUPDATE
 )
+
 
 REM ===== Self-Update: Downloader ermitteln (certutil -> curl -> bitsadmin)
 set "DL="
@@ -49,6 +54,7 @@ if not defined DL (
   call :LOG "SelfUpdate: ERR_NO_DOWNLOADER"
   goto :AFTER_SELFUPDATE
 )
+
 
 REM ===== Self-Update: Remote-Version holen
 del /q "%TmpVer%" "%TmpNew%" "%UpdaterVbs%" >nul 2>&1
@@ -73,6 +79,7 @@ if not defined RemoteVersion (
 )
 >>"%SU_Log%" echo [%date% %time%] REMOTE=%RemoteVersion% LOCAL=%InstallerVersion%
 call :LOG "SelfUpdate: REMOTE=%RemoteVersion% LOCAL=%InstallerVersion%"
+
 
 REM ===== Self-Update: Versionen vergleichen
 set "RESULT="
@@ -105,6 +112,7 @@ if "%RESULT%"=="1" (
   goto :EOF
 )
 
+
 :AFTER_SELFUPDATE
 REM =========================================================
 REM  DynDNS-Update Service Manager
@@ -114,7 +122,8 @@ echo(
 echo ========================================
 echo  DynDNS-Update Service Manager gestartet
 echo ========================================
-call :LOG "ServiceManager: started UI"
+echo Installer-Version : %InstallerVersion%
+call :LOG "ServiceManager: started UI (v=%InstallerVersion%)"
 
 set "Settingsdir=%Maindir%\Settings"
 set "Script=%Maindir%\Script\DynDNS-Update.ps1"
@@ -172,7 +181,7 @@ if %errorlevel%==0 set "DienstExistiert=1"
 :SM_MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V%InstallerVersion%
+echo      DynDNS-Update Service Manager V1.2
 echo ========================================
 if "%DienstExistiert%"=="1" goto SM_EXIST
 goto SM_NOTEXIST
@@ -289,6 +298,7 @@ goto SM_END
 echo(
 echo Script beendet. Taste druecken...
 call :LOG "--- END ---"
+pause
 goto :EOF
 
 
@@ -298,6 +308,12 @@ REM =================== Funktionen ===================
 :LOG
 REM Append eine Zeile ins Installer-Hauptlog
 >>"%INST_Log%" echo [%date% %time%] %*
+goto :eof
+
+:LOG_VERSION
+REM schreibt die aktuelle Installer-Version in beide Logs
+>>"%SU_Log%"   echo [%date% %time%] VERSION=%InstallerVersion% FILE=%SelfName%
+call :LOG "VERSION=%InstallerVersion% FILE=%SelfName%"
 goto :eof
 
 
