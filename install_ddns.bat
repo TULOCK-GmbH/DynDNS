@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM =========================================================
-REM  install_DDNS.bat – v1.3.0
+REM  install_DDNS.bat – v1.2.1
 REM  Self-Update (VBS) + DynDNS Service Manager
 REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
@@ -16,7 +16,7 @@ REM Haupt-Installer-Log (Service-Manager Aktionen)
 set "INST_Log=%Logdir%\install_ddns_installer.log"
 
 REM =================== Self-Update Config ===================
-set "InstallerVersion=1.3.0"
+set "InstallerVersion=1.2.1"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
