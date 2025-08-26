@@ -7,7 +7,7 @@ REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
 
 REM =================== Self-Update Konfiguration ===================
-set "InstallerVersion=1.0.2"
+set "InstallerVersion=1.0.5"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
@@ -77,41 +77,17 @@ if "%RESULT%"=="1" (
   for %%S in ("%TmpNew%") do set "DL_SIZE=%%~zS"
   >>"%SU_Log%" echo [%date% %time%] DL_OK size=%DL_SIZE%
 
-  REM Flag fuer die neu startende Instanz (Skip Self-Update)
   >"%RestartFlag%" echo restarted
 
   REM ===== Robuster Neustart via kleinem VBS-Updater =====
-  REM Ersetzt laufende BAT und startet sie neu – ohne cmd-Quote-Fallen
-  REM ===== Robuster Neustart via kleinem VBS-Updater =====
-> "%UpdaterVbs%" (
-  echo WScript.Sleep 400
-  echo Set fso=CreateObject("Scripting.FileSystemObject")
-  echo src="%TmpNew%": dst="%SelfPath%"
-  echo If Not fso.FileExists(src) Then
-  echo   WScript.Quit 1
-  echo End If
-  echo On Error Resume Next
-  echo fso.CopyFile src, dst, True
-  echo If Err.Number ^<> 0 Then
-  echo   WScript.Sleep 600
-  echo   Err.Clear
-  echo   fso.CopyFile src, dst, True
-  echo End If
-  echo fso.DeleteFile src, True
-  echo Dim sh: Set sh=CreateObject("WScript.Shell")
-  echo sh.Run """" ^& dst ^& """", 1, False
-  echo On Error Resume Next
-  echo fso.DeleteFile WScript.ScriptFullName, True
-)
-
-start "" wscript.exe "%UpdaterVbs%"
-goto :EOF
-
+  call :SU_WRITE_VBS "%UpdaterVbs%" "%TmpNew%" "%SelfPath%"
+  start "" wscript.exe "%UpdaterVbs%"
+  goto :EOF
 )
 
 :AFTER_SELFUPDATE
 REM =========================================================
-REM  DynDNS-Update Service Manager (dein Script)
+REM  DynDNS-Update Service Manager
 REM =========================================================
 
 echo(
@@ -119,16 +95,6 @@ echo ========================================
 echo  DynDNS-Update Service Manager gestartet
 echo ========================================
 
-@echo off
-setlocal EnableExtensions
-
-:: ===============================================
-:: DynDNS-Update Service Manager Batch Script
-:: (C) 2025 Joerg Wannemacher. Alle Rechte vorbehalten.
-:: Nutzung und Weitergabe nur mit Erlaubnis des Autors.
-:: ===============================================
-
-:: Installationsort
 set "Maindir=C:\SYS\DynDNS"
 set "Settingsdir=%Maindir%\Settings"
 set "Logdir=%Maindir%\Logs"
@@ -139,34 +105,27 @@ set "NSSM=%Toolsdir%\nssm.exe"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "Service=DynDNS-Update"
 
-:: Adminrechte pruefen (PS vorhanden? sonst mshta-Fallback)
+:: Adminrechte pruefen
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Starte Skript mit Administratorrechten neu...
-    if exist "%PS%" (
-        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb runAs"
-    ) else (
-        mshta "vbscript:Execute(""CreateObject("" + Chr(34) + ""Shell.Application"" + Chr(34) + "").ShellExecute "" + Chr(34) + ""%~f0"" + Chr(34) + "", "" "", """", ""runas"", 1 :close"")"
-    )
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb runAs"
     goto :EOF
 )
 
 :: Tools und Script pruefen
 if not exist "%PsExec%" (
-    echo [FEHLER] PsExec wurde nicht gefunden unter: %PsExec%
-    echo Bitte installieren Sie PsExec im Tools-Verzeichnis.
+    echo [FEHLER] PsExec fehlt: %PsExec%
     pause
     goto :EOF
 )
 if not exist "%NSSM%" (
-    echo [FEHLER] NSSM wurde nicht gefunden unter: %NSSM%
-    echo Bitte installieren Sie NSSM im Tools-Verzeichnis.
+    echo [FEHLER] NSSM fehlt: %NSSM%
     pause
     goto :EOF
 )
 if not exist "%Script%" (
-    echo [FEHLER] PowerShell-Script nicht gefunden: %Script%
-    echo Bitte stellen Sie sicher, dass das DynDNS-Update.ps1 Script vorhanden ist.
+    echo [FEHLER] DynDNS-Update.ps1 fehlt: %Script%
     pause
     goto :EOF
 )
@@ -175,13 +134,11 @@ if not exist "%Script%" (
 if not exist "%Settingsdir%" mkdir "%Settingsdir%"
 if not exist "%Logdir%" mkdir "%Logdir%"
 
-:: EULA fuer psexec automatisch akzeptieren
+:: EULA fuer psexec akzeptieren
 "%PsExec%" /accepteula >nul 2>&1
 
-:: Dienststatus-Variable initialisieren
+:: Dienststatus-Variable
 set "DienstExistiert=0"
-
-:: Pruefen, ob Dienst existiert
 sc query "%Service%" | find /I "SERVICE_NAME" >nul 2>&1
 if %errorlevel%==0 set "DienstExistiert=1"
 
@@ -190,231 +147,155 @@ cls
 echo ========================================
 echo      DynDNS-Update Service Manager V1.2
 echo ========================================
+if "%DienstExistiert%"=="1" goto SM_EXIST
+goto SM_NOTEXIST
 
-if "%DienstExistiert%"=="1" goto SM_DIENST_EXISTIERT
-goto SM_DIENST_NICHT_EXISTIERT
-
-:SM_DIENST_EXISTIERT
+:SM_EXIST
 echo Der Dienst "%Service%" ist bereits installiert.
 echo(
-echo Was moechten Sie tun?
 echo [N]eu installieren
 echo [L]oeschen
 echo [S]tatus pruefen
 echo [A]bbrechen
-set "Wahl="
-set /p "Wahl=Bitte Auswahl eingeben (N/L/S/A): "
-if /I "%Wahl%"=="N" goto SM_NEUINSTALL
-if /I "%Wahl%"=="L" goto SM_LOESCHEN
+set /p "Wahl=Bitte Auswahl (N/L/S/A): "
+if /I "%Wahl%"=="N" goto SM_NEU
+if /I "%Wahl%"=="L" goto SM_DEL
 if /I "%Wahl%"=="S" goto SM_STATUS
-if /I "%Wahl%"=="A" goto SM_ENDE
+if /I "%Wahl%"=="A" goto SM_END
 goto SM_MENU
 
-:SM_DIENST_NICHT_EXISTIERT
+:SM_NOTEXIST
 echo --- Dienst NICHT installiert ---
 echo [I]nstallieren
 echo [A]bbrechen
-set "Wahl="
-set /p "Wahl=Bitte Auswahl eingeben (I/A): "
-if /I "%Wahl%"=="I" goto SM_NEUINSTALL
-if /I "%Wahl%"=="A" goto SM_ENDE
+set /p "Wahl=Bitte Auswahl (I/A): "
+if /I "%Wahl%"=="I" goto SM_NEU
+if /I "%Wahl%"=="A" goto SM_END
 goto SM_MENU
 
-:SM_NEUINSTALL
+:SM_NEU
 echo(
-echo Pruefe auf alte TXT/LOG-Dateien in %Maindir% ...
-if exist "%Settingsdir%\*.txt" (
-    del /q "%Settingsdir%\*.*"
-    if %errorlevel%==0 (
-        echo Alle TXT-Dateien wurden geloescht.
-    ) else (
-        echo [WARNUNG] Fehler beim Loeschen der TXT-Dateien.
-    )
-) else (
-    echo Keine TXT-Dateien gefunden.
-)
-if exist "%Logdir%\*.log" (
-    del /q "%Logdir%\*.*"
-    if %errorlevel%==0 (
-        echo Alle LOG-Dateien wurden geloescht.
-    ) else (
-        echo [WARNUNG] Fehler beim Loeschen der LOG-Dateien.
-    )
-) else (
-    echo Keine LOG-Dateien gefunden.
-)
-echo(
+echo Loesche alte TXT/LOG-Dateien...
+del /q "%Settingsdir%\*.*" >nul 2>&1
+del /q "%Logdir%\*.log" >nul 2>&1
+
 echo Starte PowerShell via PsExec...
 "%PsExec%" -i -s "%PS%" -ExecutionPolicy Bypass -NoProfile -File "%Script%"
-set "PsExecResult=%errorlevel%"
-echo PsExec beendet mit Fehlerlevel: %PsExecResult%
-if %PsExecResult% neq 0 (
-    echo [WARNUNG] PsExec wurde mit Fehler beendet. Installation wird fortgesetzt...
-)
 
 echo Installiere/ersetze Dienst...
 "%NSSM%" stop %Service% >nul 2>&1
 "%NSSM%" remove %Service% confirm >nul 2>&1
-
 "%NSSM%" install %Service% "%PS%" -ExecutionPolicy Bypass -File "%Script%"
-if %errorlevel% neq 0 (
-    echo [FEHLER] Service-Installation mit NSSM fehlgeschlagen!
-    pause
-    goto :EOF
-)
 
-:: Service-Konfiguration
 "%NSSM%" set %Service% DisplayName "Dynamisches DNS Update"
-"%NSSM%" set %Service% Description "Aktualisiert automatisch die DynDNS-Adresse alle 1 Minute."
-"%NSSM%" set %Service% AppRestartDelay 30000
+"%NSSM%" set %Service% Description "Aktualisiert DynDNS alle 1 Minute."
 "%NSSM%" set %Service% AppStdout "%Logdir%\service.log"
 "%NSSM%" set %Service% AppStderr "%Logdir%\service-error.log"
-"%NSSM%" set %Service% AppRotateFiles 1
-"%NSSM%" set %Service% AppRotateOnline 1
-"%NSSM%" set %Service% AppRotateBytes 1048576
 
-echo Service-Konfiguration abgeschlossen.
-echo Starte Service...
 net start %Service% >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [FEHLER] Service konnte nicht gestartet werden!
-    echo Pruefe die Logs unter: %Logdir%
-    pause
-    goto :EOF
-)
 goto SM_CHECK
 
-:SM_LOESCHEN
-echo(
-echo Pruefe auf alte TXT/LOG-Dateien in %Maindir% ...
-if exist "%Settingsdir%\*.txt" (
-    del /q "%Settingsdir%\*.*"
-    if %errorlevel%==0 (
-        echo Alle TXT-Dateien wurden geloescht.
-    ) else (
-        echo [WARNUNG] Fehler beim Loeschen der TXT-Dateien.
-    )
-) else (
-    echo Keine TXT-Dateien gefunden.
-)
-if exist "%Logdir%\*.log" (
-    del /q "%Logdir%\*.*"
-    if %errorlevel%==0 (
-        echo Alle LOG-Dateien wurden geloescht.
-    ) else (
-        echo [WARNUNG] Fehler beim Loeschen der LOG-Dateien.
-    )
-) else (
-    echo Keine LOG-Dateien gefunden.
-)
+:SM_DEL
 echo(
 echo Stoppe und loesche Dienst...
 net stop %Service% >nul 2>&1
 "%NSSM%" remove %Service% confirm
-if %errorlevel% neq 0 (
-    echo [FEHLER] Service-Deinstallation fehlgeschlagen!
-    pause
-    goto :EOF
-)
 goto SM_CHECKDEL
 
 :SM_STATUS
 echo(
-echo === SERVICE STATUS ===
 sc query "%Service%" 2>nul
-if %errorlevel% neq 0 (
-    echo Service "%Service%" ist nicht installiert.
-) else (
-    echo(
-    echo === SERVICE KONFIGURATION ===
-    sc qc "%Service%" 2>nul
-)
+sc qc "%Service%" 2>nul
 echo(
-echo === LOG-DATEIEN ===
 if exist "%Logdir%\service.log" (
-    echo Service-Log gefunden: %Logdir%\service.log
-    for %%i in ("%Logdir%\service.log") do echo Groesse: %%~zi Bytes
-) else (
-    echo Keine Service-Log-Datei gefunden.
+    for %%i in ("%Logdir%\service.log") do echo Logdatei Groesse: %%~zi Bytes
 )
-if exist "%Logdir%\service-error.log" (
-    echo Error-Log gefunden: %Logdir%\service-error.log
-    for %%i in ("%Logdir%\service-error.log") do echo Groesse: %%~zi Bytes
-) else (
-    echo Keine Error-Log-Datei gefunden.
-)
-echo(
 pause
 goto SM_MENU
 
 :SM_CHECK
-echo Warte 3 Sekunden auf Service-Start...
 timeout /t 3 >nul
 sc query "%Service%" | find "RUNNING" >nul
 if %errorlevel%==0 (
-    echo [OK] Dienst '%Service%' laeuft erfolgreich!
-    echo Logs werden geschrieben nach: %Logdir%
+    echo [OK] Dienst laeuft!
 ) else (
-    echo [FEHLER] Dienst '%Service%' ist NICHT gestartet!
-    echo Pruefe die Logs unter: %Logdir%
+    echo [FEHLER] Dienst NICHT gestartet!
 )
-goto SM_ENDE
+goto SM_END
 
 :SM_CHECKDEL
 sc query "%Service%" >nul 2>&1
 if %errorlevel%==0 (
-    echo [FEHLER] Dienst '%Service%' wurde nicht vollstaendig geloescht!
+    echo [FEHLER] Dienst nicht vollstaendig geloescht!
 ) else (
-    echo [OK] Dienst '%Service%' erfolgreich geloescht!
-    set "DienstExistiert=0"
+    echo [OK] Dienst geloescht!
 )
-goto SM_ENDE
+goto SM_END
 
-:SM_ENDE
+:SM_END
 echo(
-echo Script beendet. Druecken Sie eine Taste...
+echo Script beendet. Taste druecken...
 pause
 goto :EOF
-
 
 REM =================== Self-Update: Funktionen ===================
 
 :SU_DOWNLOAD
-REM %1=URL %2=OUT %3=DL(curl|bits)
 set "URL=%~1"
 set "OUT=%~2"
 set "DL=%~3"
 del /q "%OUT%" >nul 2>&1
 if /I "%DL%"=="cert" (
-  certutil -urlcache -split -f "%URL%" "%OUT%" >nul 2>&1
-  goto :eof
+  certutil -urlcache -split -f "%URL%" "%OUT%" >nul 2>&1 & goto :eof
 )
 if /I "%DL%"=="curl" (
-  curl -sL "%URL%" -o "%OUT%" 2>nul
-  goto :eof
+  curl -sL "%URL%" -o "%OUT%" 2>nul & goto :eof
 )
 if /I "%DL%"=="bits" (
-  bitsadmin /transfer ddnstmp /download /priority FOREGROUND "%URL%" "%OUT%" >nul 2>&1
-  goto :eof
+  bitsadmin /transfer ddnstmp /download /priority FOREGROUND "%URL%" "%OUT%" >nul 2>&1 & goto :eof
 )
 goto :eof
 
 :SU_VERCMP
-REM Vergleicht A vs B (Semver bis 4 Teile). Ergebnis in %3:
-REM -1 = B < A, 0 = gleich, 1 = B > A
 setlocal EnableDelayedExpansion
 set "A=%~1"
 set "B=%~2"
 for /f "tokens=1-4 delims=." %%a in ("%A%") do (set a1=%%a&set a2=%%b&set a3=%%c&set a4=%%d)
 for /f "tokens=1-4 delims=." %%a in ("%B%") do (set b1=%%a&set b2=%%b&set b3=%%c&set b4=%%d)
 for %%v in (a1 a2 a3 a4 b1 b2 b3 b4) do if "!%%v!"=="" set "%%v=0"
-for %%v in (a1 a2 a3 a4 b1 b2 b3 b4) do (
-  for /f "delims=0123456789" %%x in ("!%%v!") do (endlocal & set "%~3=" & goto :eof)
-)
 for %%i in (1 2 3 4) do (
   set /a da=!a%%i!, db=!b%%i!
-  if !db! gtr !da! (endlocal & set "%~3=1"  & goto :eof)
+  if !db! gtr !da! (endlocal & set "%~3=1" & goto :eof)
   if !db! lss !da! (endlocal & set "%~3=-1" & goto :eof)
 )
 endlocal & set "%~3=0"
 goto :eof
+
+:SU_WRITE_VBS
+REM %1=UpdaterVbs %2=SrcTmpNew %3=DstSelfPath
+setlocal DisableDelayedExpansion
+set "UP=%~1"
+set "SRC=%~2"
+set "DST=%~3"
+del /q "%UP%" >nul 2>&1
+
+>>"%UP%" echo WScript.Sleep 400
+>>"%UP%" echo Dim fso: Set fso=CreateObject("Scripting.FileSystemObject")
+>>"%UP%" echo Dim sh : Set sh = CreateObject("WScript.Shell")
+>>"%UP%" echo Dim src, dst, i
+>>"%UP%" echo src="%SRC%": dst="%DST%"
+>>"%UP%" echo If Not fso.FileExists(src) Then WScript.Quit 1
+>>"%UP%" echo On Error Resume Next
+>>"%UP%" echo For i = 1 To 5
+>>"%UP%" echo   fso.CopyFile src, dst, True
+>>"%UP%" echo   If Err.Number = 0 Then Exit For
+>>"%UP%" echo   Err.Clear
+>>"%UP%" echo   WScript.Sleep 400
+>>"%UP%" echo Next
+>>"%UP%" echo fso.DeleteFile src, True
+>>"%UP%" echo sh.Run """" ^& dst ^& """", 1, False
+>>"%UP%" echo On Error Resume Next
+>>"%UP%" echo fso.DeleteFile WScript.ScriptFullName, True
+
+endlocal & goto :eof
+
