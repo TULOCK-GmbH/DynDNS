@@ -7,7 +7,7 @@ REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
 
 REM =================== Self-Update Konfiguration ===================
-set "InstallerVersion=1.0.5"
+set "InstallerVersion=1.0.9"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
@@ -145,7 +145,7 @@ if %errorlevel%==0 set "DienstExistiert=1"
 :SM_MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V1.2
+echo      DynDNS-Update Service Manager V1.0.9
 echo ========================================
 if "%DienstExistiert%"=="1" goto SM_EXIST
 goto SM_NOTEXIST
