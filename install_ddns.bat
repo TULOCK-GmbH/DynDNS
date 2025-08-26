@@ -2,43 +2,53 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM =========================================================
-REM  install_DDNS.bat – Self-Update (VBS) + Service Manager
+REM  install_DDNS.bat – v1.2.0
+REM  Self-Update (VBS) + DynDNS Service Manager
 REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
 
-REM =================== Self-Update Konfiguration ===================
-set "InstallerVersion=1.0.9"
+
+REM =================== Basis-Pfade ===================
+set "Maindir=C:\SYS\DynDNS"
+set "Logdir=%Maindir%\Logs"
+if not exist "%Logdir%" mkdir "%Logdir%" >nul 2>&1
+
+
+REM =================== Self-Update Config ===================
+set "InstallerVersion=1.2.0"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
-REM =================== Self-Update Temp/Pfade/Logs =================
+REM =================== Self-Update Pfade/Logs ===================
 set "SelfPath=%~f0"
 set "SelfName=%~nx0"
-set "TmpVer=%TEMP%\%SelfName%.ver"
-set "TmpNew=%TEMP%\%SelfName%.new"
-set "RestartFlag=%TEMP%\%SelfName%.restarted"
-set "UpdaterVbs=%TEMP%\%SelfName%_upd.vbs"
-set "SU_Log=%TEMP%\install_ddns_update.log"
+set "TmpVer=%Logdir%\%SelfName%.ver"
+set "TmpNew=%Logdir%\%SelfName%.new"
+set "RestartFlag=%Logdir%\%SelfName%.restarted"
+set "UpdaterVbs=%Logdir%\%SelfName%_upd.vbs"
+set "SU_Log=%Logdir%\install_ddns_update.log"
 
-REM ===== Restart nach Update? -> Self-Update einmalig ueberspringen
+
+REM ===== Self-Update: Restart nach Update? -> einmalig ueberspringen
 if exist "%RestartFlag%" (
   del /q "%RestartFlag%" >nul 2>&1
   >>"%SU_Log%" echo [%date% %time%] RESTART_SKIP
   goto :AFTER_SELFUPDATE
 )
 
-REM ===== Downloader ermitteln (certutil -> curl -> bitsadmin)
+
+REM ===== Self-Update: Downloader ermitteln (certutil -> curl -> bitsadmin)
 set "DL="
 where certutil >nul 2>&1 && set "DL=cert"
 if not defined DL where curl >nul 2>&1 && set "DL=curl"
 if not defined DL where bitsadmin >nul 2>&1 && set "DL=bits"
-
 if not defined DL (
   >>"%SU_Log%" echo [%date% %time%] ERR_NO_DOWNLOADER
   goto :AFTER_SELFUPDATE
 )
 
-REM ===== Remote-Version holen
+
+REM ===== Self-Update: Remote-Version holen
 del /q "%TmpVer%" "%TmpNew%" "%UpdaterVbs%" >nul 2>&1
 call :SU_DOWNLOAD "%VersionUrl%" "%TmpVer%" "%DL%"
 if not exist "%TmpVer%" (
@@ -59,7 +69,8 @@ if not defined RemoteVersion (
 )
 >>"%SU_Log%" echo [%date% %time%] REMOTE=%RemoteVersion% LOCAL=%InstallerVersion%
 
-REM ===== Versionen vergleichen
+
+REM ===== Self-Update: Versionen vergleichen
 set "RESULT="
 call :SU_VERCMP "%InstallerVersion%" "%RemoteVersion%" RESULT
 if not defined RESULT (
@@ -79,11 +90,12 @@ if "%RESULT%"=="1" (
 
   >"%RestartFlag%" echo restarted
 
-  REM ===== Robuster Neustart via kleinem VBS-Updater =====
+  REM ===== Robuster Neustart via kleinem VBS-Updater (line-by-line) =====
   call :SU_WRITE_VBS "%UpdaterVbs%" "%TmpNew%" "%SelfPath%"
   start "" wscript.exe "%UpdaterVbs%"
   goto :EOF
 )
+
 
 :AFTER_SELFUPDATE
 REM =========================================================
@@ -95,9 +107,7 @@ echo ========================================
 echo  DynDNS-Update Service Manager gestartet
 echo ========================================
 
-set "Maindir=C:\SYS\DynDNS"
 set "Settingsdir=%Maindir%\Settings"
-set "Logdir=%Maindir%\Logs"
 set "Script=%Maindir%\Script\DynDNS-Update.ps1"
 set "Toolsdir=%Maindir%\Tools"
 set "PsExec=%Toolsdir%\PsExec64.exe"
@@ -105,11 +115,15 @@ set "NSSM=%Toolsdir%\nssm.exe"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "Service=DynDNS-Update"
 
-:: Adminrechte pruefen
+:: Adminrechte pruefen (PS vorhanden? sonst mshta-Fallback)
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Starte Skript mit Administratorrechten neu...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb runAs"
+    if exist "%PS%" (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb runAs"
+    ) else (
+        mshta "vbscript:Execute(""CreateObject("" + Chr(34) + ""Shell.Application"" + Chr(34) + "").ShellExecute "" + Chr(34) + ""%~f0"" + Chr(34) + "", "" "", """", ""runas"", 1 :close"")"
+    )
     goto :EOF
 )
 
@@ -145,7 +159,7 @@ if %errorlevel%==0 set "DienstExistiert=1"
 :SM_MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V1.0.9
+echo      DynDNS-Update Service Manager V1.2
 echo ========================================
 if "%DienstExistiert%"=="1" goto SM_EXIST
 goto SM_NOTEXIST
@@ -209,7 +223,15 @@ sc qc "%Service%" 2>nul
 echo(
 if exist "%Logdir%\service.log" (
     for %%i in ("%Logdir%\service.log") do echo Logdatei Groesse: %%~zi Bytes
+) else (
+    echo Keine Service-Log-Datei gefunden.
 )
+if exist "%Logdir%\service-error.log" (
+    for %%i in ("%Logdir%\service-error.log") do echo Error-Log Groesse: %%~zi Bytes
+) else (
+    echo Keine Service-Error-Log-Datei gefunden.
+)
+echo(
 pause
 goto SM_MENU
 
@@ -218,8 +240,10 @@ timeout /t 3 >nul
 sc query "%Service%" | find "RUNNING" >nul
 if %errorlevel%==0 (
     echo [OK] Dienst laeuft!
+    echo Logs: %Logdir%
 ) else (
     echo [FEHLER] Dienst NICHT gestartet!
+    echo Bitte pruefen: %Logdir%
 )
 goto SM_END
 
@@ -229,6 +253,7 @@ if %errorlevel%==0 (
     echo [FEHLER] Dienst nicht vollstaendig geloescht!
 ) else (
     echo [OK] Dienst geloescht!
+    set "DienstExistiert=0"
 )
 goto SM_END
 
@@ -238,9 +263,12 @@ echo Script beendet. Taste druecken...
 pause
 goto :EOF
 
+
+
 REM =================== Self-Update: Funktionen ===================
 
 :SU_DOWNLOAD
+REM %1=URL %2=OUT %3=DL(curl|bits)
 set "URL=%~1"
 set "OUT=%~2"
 set "DL=%~3"
@@ -256,7 +284,9 @@ if /I "%DL%"=="bits" (
 )
 goto :eof
 
+
 :SU_VERCMP
+REM -1 = B < A, 0 = gleich, 1 = B > A
 setlocal EnableDelayedExpansion
 set "A=%~1"
 set "B=%~2"
@@ -271,6 +301,7 @@ for %%i in (1 2 3 4) do (
 endlocal & set "%~3=0"
 goto :eof
 
+
 :SU_WRITE_VBS
 REM %1=UpdaterVbs %2=SrcTmpNew %3=DstSelfPath
 setlocal DisableDelayedExpansion
@@ -278,7 +309,6 @@ set "UP=%~1"
 set "SRC=%~2"
 set "DST=%~3"
 del /q "%UP%" >nul 2>&1
-
 >>"%UP%" echo WScript.Sleep 400
 >>"%UP%" echo Dim fso: Set fso=CreateObject("Scripting.FileSystemObject")
 >>"%UP%" echo Dim sh : Set sh = CreateObject("WScript.Shell")
@@ -296,6 +326,4 @@ del /q "%UP%" >nul 2>&1
 >>"%UP%" echo sh.Run """" ^& dst ^& """", 1, False
 >>"%UP%" echo On Error Resume Next
 >>"%UP%" echo fso.DeleteFile WScript.ScriptFullName, True
-
 endlocal & goto :eof
-
