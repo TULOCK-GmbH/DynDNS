@@ -1,23 +1,112 @@
 @echo off
-echo.
+setlocal EnableExtensions EnableDelayedExpansion
+
+REM =========================================================
+REM  install_DDNS.bat – Self-Update + DynDNS Service Manager
+REM  (C) 2025 Joerg Wannemacher
+REM =========================================================
+
+REM =================== Self-Update Konfiguration ===================
+set "InstallerVersion=1.0.1"
+set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
+set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
+
+REM =================== Self-Update Temp/Pfade/Logs =================
+set "SelfPath=%~f0"
+set "SelfName=%~nx0"
+set "TmpVer=%TEMP%\%SelfName%.ver"
+set "TmpNew=%TEMP%\%SelfName%.new"
+set "RestartFlag=%TEMP%\%SelfName%.restarted"
+set "Updater=%TEMP%\%SelfName%_upd.cmd"
+set "SU_Log=%TEMP%\install_ddns_update.log"
+
+REM ===== Self-Update: Restart nach Update? -> Skip Self-Update einmalig
+if exist "%RestartFlag%" (
+  del /q "%RestartFlag%" >nul 2>&1
+  >>"%SU_Log%" echo [%date% %time%] RESTART_SKIP
+  goto :AFTER_SELFUPDATE
+)
+
+REM ===== Self-Update: Downloader ermitteln (certutil -> curl -> bitsadmin)
+set "DL="
+where certutil >nul 2>&1 && set "DL=cert"
+if not defined DL where curl >nul 2>&1 && set "DL=curl"
+if not defined DL where bitsadmin >nul 2>&1 && set "DL=bits"
+
+if not defined DL (
+  >>"%SU_Log%" echo [%date% %time%] ERR_NO_DOWNLOADER
+  goto :AFTER_SELFUPDATE
+)
+
+REM ===== Self-Update: Remote-Version holen
+del /q "%TmpVer%" "%TmpNew%" "%Updater%" >nul 2>&1
+call :SU_DOWNLOAD "%VersionUrl%" "%TmpVer%" "%DL%"
+if not exist "%TmpVer%" (
+  >>"%SU_Log%" echo [%date% %time%] WARN_VER_FETCH_FAIL
+  goto :AFTER_SELFUPDATE
+)
+
+set "RemoteVersion="
+for /f "usebackq delims=" %%L in ("%TmpVer%") do if not defined RemoteVersion set "RemoteVersion=%%L"
+del /q "%TmpVer%" >nul 2>&1
+
+for /f "tokens=* delims= " %%A in ("%RemoteVersion%") do set "RemoteVersion=%%A"
+set "RemoteVersion=%RemoteVersion: =%"
+
+if not defined RemoteVersion (
+  >>"%SU_Log%" echo [%date% %time%] WARN_VER_EMPTY
+  goto :AFTER_SELFUPDATE
+)
+>>"%SU_Log%" echo [%date% %time%] REMOTE=%RemoteVersion% LOCAL=%InstallerVersion%
+
+REM ===== Self-Update: Versionen vergleichen
+set "RESULT="
+call :SU_VERCMP "%InstallerVersion%" "%RemoteVersion%" RESULT
+if not defined RESULT (
+  >>"%SU_Log%" echo [%date% %time%] WARN_CMP_FAIL
+  goto :AFTER_SELFUPDATE
+)
+
+if "%RESULT%"=="1" (
+  >>"%SU_Log%" echo [%date% %time%] UPDATE_AVAILABLE
+  call :SU_DOWNLOAD "%ScriptUrl%" "%TmpNew%" "%DL%"
+  if not exist "%TmpNew%" (
+    >>"%SU_Log%" echo [%date% %time%] ERR_DL_FAIL
+    goto :AFTER_SELFUPDATE
+  )
+  for %%S in ("%TmpNew%") do set "DL_SIZE=%%~zS"
+  >>"%SU_Log%" echo [%date% %time%] DL_OK size=%DL_SIZE%
+
+  >"%RestartFlag%" echo restarted
+
+  call :SU_WRITE_UPDATER "%Updater%" "%SelfPath%" "%TmpNew%" "%RestartFlag%" "%SU_Log%"
+  start "" "%Updater%"
+  >>"%SU_Log%" echo [%date% %time%] UPDATER_STARTED %Updater%
+  goto :EOF
+)
+
+REM ===== (kein Update oder lokal neuer) -> Normal weiter
+:AFTER_SELFUPDATE
+
+REM =========================================================
+REM  DynDNS-Update Service Manager (dein Script)
+REM =========================================================
+
+echo(
 echo ========================================
 echo  DynDNS-Update Service Manager gestartet
 echo ========================================
 
+@echo off
+setlocal EnableExtensions
+
 :: ===============================================
 :: DynDNS-Update Service Manager Batch Script
-:: Version: 1.4.2 (2025-08-25)
 :: (C) 2025 Joerg Wannemacher. Alle Rechte vorbehalten.
 :: Nutzung und Weitergabe nur mit Erlaubnis des Autors.
 :: ===============================================
-setlocal
 
-:: ====== Installer (dieses Skript) – Version & Self-Update-Quellen ======
-set "InstallerVersion=1.4.2"
-set "InstallerVersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
-set "InstallerScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
-
-:: ====== Basispfade / Variablen ======
+:: Installationsort
 set "Maindir=C:\SYS\DynDNS"
 set "Settingsdir=%Maindir%\Settings"
 set "Logdir=%Maindir%\Logs"
@@ -28,118 +117,64 @@ set "NSSM=%Toolsdir%\nssm.exe"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "Service=DynDNS-Update"
 
-:: Optionale Update-Quellen (für -UpdateNow)
-set "UpdateInfoUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.version"
-set "UpdateScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.ps1"
-
-:: ====== Adminrechte pruefen ======
+:: Adminrechte pruefen (mit PS; Fallback via mshta falls PS fehlt)
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Starte Skript mit Administratorrechten neu...
-    powershell -Command "Start-Process '%~f0' -Verb runAs"
-    goto :eof
-)
-
-:: =======================================================================
-:: SELF-UPDATE BLOCK (fuer diese install_ddns.bat) - laeuft direkt beim Start
-:: =======================================================================
-set "SelfPath=%~f0"
-set "SelfName=%~nx0"
-set "TmpNew=%TEMP%\%SelfName%.new"
-set "Updater=%TEMP%\update_%RANDOM%_%RANDOM%.cmd"
-
-echo.
-echo [INFO] Pruefe auf neuere Version des Installers...
-
-for /f "usebackq tokens=*" %%v in (`
-  powershell -NoProfile -Command "try{ (Invoke-WebRequest -UseBasicParsing -Uri '%InstallerVersionUrl%' -TimeoutSec 12).Content.Trim() }catch{''}"
-`) do set "RemoteInstallerVersion=%%v"
-
-if defined RemoteInstallerVersion (
-    echo Installer lokal : %InstallerVersion%
-    echo Installer remote: %RemoteInstallerVersion%
-
-    powershell -NoProfile -Command ^
-      "$v1=[Version]'%InstallerVersion%'; $v2=[Version]'%RemoteInstallerVersion%'; if($v2 -gt $v1){exit 1}else{exit 0}"
-    if errorlevel 1 (
-        echo [INFO] Neuere Installer-Version gefunden. Lade Update...
-        del /f /q "%TmpNew%" >nul 2>&1
-        powershell -NoProfile -Command ^
-          "Invoke-WebRequest -UseBasicParsing -Uri '%InstallerScriptUrl%' -OutFile '%TmpNew%' -TimeoutSec 25"
-
-        if exist "%TmpNew%" (
-            echo [OK] Installer-Update geladen. Ersetze Datei und starte neu...
-            rem Updater-Stub: wartet kurz, ersetzt Datei, startet neu, raeumt sich auf
-            >"%Updater%" echo @echo off
-            >>"%Updater%" echo setlocal
-            >>"%Updater%" echo ping 127.0.0.1 -n 2 ^>nul
-            >>"%Updater%" echo copy /Y "%TmpNew%" "%SelfPath%" ^>nul
-            >>"%Updater%" echo if errorlevel 1 goto :retry
-            >>"%Updater%" echo del /f /q "%TmpNew%" ^>nul 2^>^&1
-            >>"%Updater%" echo start "" "%SelfPath%"
-            >>"%Updater%" echo (ping 127.0.0.1 -n 2 ^>nul ^& del /f /q "%%~f0") ^>nul 2^>^&1
-            >>"%Updater%" echo exit /b
-            >>"%Updater%" echo :retry
-            >>"%Updater%" echo ping 127.0.0.1 -n 2 ^>nul
-            >>"%Updater%" echo goto :^retry
-            start "" "%Updater%"
-            goto :eof
-        ) else (
-            echo [FEHLER] Installer-Update konnte nicht heruntergeladen werden. Fahre ohne Update fort.
-        )
+    if exist "%PS%" (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb runAs"
     ) else (
-        echo [OK] Installer ist aktuell.
+        mshta "vbscript:Execute(""CreateObject("" + Chr(34) + ""Shell.Application"" + Chr(34) + "").ShellExecute "" + Chr(34) + ""%~f0"" + Chr(34) + "", "" "", """", ""runas"", 1 :close"")"
     )
-) else (
-    echo [WARNUNG] Konnte Remote-Installer-Version nicht abrufen. Fahre ohne Update fort.
+    exit /b
 )
 
-:: ====== Tools und Script pruefen ======
+:: Tools und Script pruefen
 if not exist "%PsExec%" (
     echo [FEHLER] PsExec wurde nicht gefunden unter: %PsExec%
     echo Bitte installieren Sie PsExec im Tools-Verzeichnis.
     pause
-    goto :eof
+    exit /b 1
 )
 if not exist "%NSSM%" (
     echo [FEHLER] NSSM wurde nicht gefunden unter: %NSSM%
     echo Bitte installieren Sie NSSM im Tools-Verzeichnis.
     pause
-    goto :eof
+    exit /b 1
 )
 if not exist "%Script%" (
     echo [FEHLER] PowerShell-Script nicht gefunden: %Script%
     echo Bitte stellen Sie sicher, dass das DynDNS-Update.ps1 Script vorhanden ist.
     pause
-    goto :eof
+    exit /b 1
 )
 
-:: ====== Ordnererstellung ======
+:: Ordnererstellung
 if not exist "%Settingsdir%" mkdir "%Settingsdir%"
 if not exist "%Logdir%" mkdir "%Logdir%"
 
-:: ====== EULA fuer psexec automatisch akzeptieren ======
+:: EULA fuer psexec automatisch akzeptieren
 "%PsExec%" /accepteula >nul 2>&1
 
-:: ====== Dienststatus-Variable initialisieren ======
+:: Dienststatus-Variable initialisieren
 set "DienstExistiert=0"
 
 :: Pruefen, ob Dienst existiert
 sc query "%Service%" | find /I "SERVICE_NAME" >nul 2>&1
 if %errorlevel%==0 set "DienstExistiert=1"
 
-:MENU
+:SM_MENU
 cls
 echo ========================================
-echo      DynDNS-Update Service Manager V1.4a
+echo      DynDNS-Update Service Manager V1.0.1
 echo ========================================
 
-if "%DienstExistiert%"=="1" goto DIENST_EXISTIERT
-goto DIENST_NICHT_EXISTIERT
+if "%DienstExistiert%"=="1" goto SM_DIENST_EXISTIERT
+goto SM_DIENST_NICHT_EXISTIERT
 
-:DIENST_EXISTIERT
+:SM_DIENST_EXISTIERT
 echo Der Dienst "%Service%" ist bereits installiert.
-echo.
+echo(
 echo Was moechten Sie tun?
 echo [N]eu installieren
 echo [L]oeschen
@@ -147,24 +182,24 @@ echo [S]tatus pruefen
 echo [A]bbrechen
 set "Wahl="
 set /p "Wahl=Bitte Auswahl eingeben (N/L/S/A): "
-if /I "%Wahl%"=="N" goto NEUINSTALL
-if /I "%Wahl%"=="L" goto LOESCHEN
-if /I "%Wahl%"=="S" goto STATUS
-if /I "%Wahl%"=="A" goto ENDE
-goto MENU
+if /I "%Wahl%"=="N" goto SM_NEUINSTALL
+if /I "%Wahl%"=="L" goto SM_LOESCHEN
+if /I "%Wahl%"=="S" goto SM_STATUS
+if /I "%Wahl%"=="A" goto SM_ENDE
+goto SM_MENU
 
-:DIENST_NICHT_EXISTIERT
+:SM_DIENST_NICHT_EXISTIERT
 echo --- Dienst NICHT installiert ---
 echo [I]nstallieren
 echo [A]bbrechen
 set "Wahl="
 set /p "Wahl=Bitte Auswahl eingeben (I/A): "
-if /I "%Wahl%"=="I" goto NEUINSTALL
-if /I "%Wahl%"=="A" goto ENDE
-goto MENU
+if /I "%Wahl%"=="I" goto SM_NEUINSTALL
+if /I "%Wahl%"=="A" goto SM_ENDE
+goto SM_MENU
 
-:NEUINSTALL
-echo.
+:SM_NEUINSTALL
+echo(
 echo Pruefe auf alte TXT/LOG-Dateien in %Maindir% ...
 if exist "%Settingsdir%\*.txt" (
     del /q "%Settingsdir%\*.*"
@@ -186,8 +221,7 @@ if exist "%Logdir%\*.log" (
 ) else (
     echo Keine LOG-Dateien gefunden.
 )
-
-echo.
+echo(
 echo Starte PowerShell via PsExec...
 "%PsExec%" -i -s "%PS%" -ExecutionPolicy Bypass -NoProfile -File "%Script%"
 set "PsExecResult=%errorlevel%"
@@ -196,19 +230,6 @@ if %PsExecResult% neq 0 (
     echo [WARNUNG] PsExec wurde mit Fehler beendet. Installation wird fortgesetzt...
 )
 
-:: ====== Update-Check (vor der Dienstinstallation) ======
-echo.
-echo Fuehre Update-Check durch...
-"%PS%" -ExecutionPolicy Bypass -NoProfile -File "%Script%" -UpdateNow ^
-  -UpdateInfoUrl   "%UpdateInfoUrl%" ^
-  -UpdateScriptUrl "%UpdateScriptUrl%"
-if %errorlevel% neq 0 (
-    echo [WARNUNG] Update-Check wurde mit Fehler beendet.
-) else (
-    echo [OK] Update-Check abgeschlossen.
-)
-
-echo.
 echo Installiere/ersetze Dienst...
 "%NSSM%" stop %Service% >nul 2>&1
 "%NSSM%" remove %Service% confirm >nul 2>&1
@@ -217,10 +238,10 @@ echo Installiere/ersetze Dienst...
 if %errorlevel% neq 0 (
     echo [FEHLER] Service-Installation mit NSSM fehlgeschlagen!
     pause
-    goto :eof
+    exit /b 1
 )
 
-:: ====== Service-Konfiguration ======
+:: Service-Konfiguration
 "%NSSM%" set %Service% DisplayName "Dynamisches DNS Update"
 "%NSSM%" set %Service% Description "Aktualisiert automatisch die DynDNS-Adresse alle 1 Minute."
 "%NSSM%" set %Service% AppRestartDelay 30000
@@ -237,12 +258,12 @@ if %errorlevel% neq 0 (
     echo [FEHLER] Service konnte nicht gestartet werden!
     echo Pruefe die Logs unter: %Logdir%
     pause
-    goto :eof
+    exit /b 1
 )
-goto CHECK
+goto SM_CHECK
 
-:LOESCHEN
-echo.
+:SM_LOESCHEN
+echo(
 echo Pruefe auf alte TXT/LOG-Dateien in %Maindir% ...
 if exist "%Settingsdir%\*.txt" (
     del /q "%Settingsdir%\*.*"
@@ -264,29 +285,29 @@ if exist "%Logdir%\*.log" (
 ) else (
     echo Keine LOG-Dateien gefunden.
 )
-echo.
+echo(
 echo Stoppe und loesche Dienst...
 net stop %Service% >nul 2>&1
 "%NSSM%" remove %Service% confirm
 if %errorlevel% neq 0 (
     echo [FEHLER] Service-Deinstallation fehlgeschlagen!
     pause
-    goto :eof
+    exit /b 1
 )
-goto CHECKDEL
+goto SM_CHECKDEL
 
-:STATUS
-echo.
+:SM_STATUS
+echo(
 echo === SERVICE STATUS ===
 sc query "%Service%" 2>nul
 if %errorlevel% neq 0 (
     echo Service "%Service%" ist nicht installiert.
 ) else (
-    echo.
+    echo(
     echo === SERVICE KONFIGURATION ===
     sc qc "%Service%" 2>nul
 )
-echo.
+echo(
 echo === LOG-DATEIEN ===
 if exist "%Logdir%\service.log" (
     echo Service-Log gefunden: %Logdir%\service.log
@@ -300,11 +321,11 @@ if exist "%Logdir%\service-error.log" (
 ) else (
     echo Keine Error-Log-Datei gefunden.
 )
-echo.
+echo(
 pause
-goto MENU
+goto SM_MENU
 
-:CHECK
+:SM_CHECK
 echo Warte 3 Sekunden auf Service-Start...
 timeout /t 3 >nul
 sc query "%Service%" | find "RUNNING" >nul
@@ -315,9 +336,9 @@ if %errorlevel%==0 (
     echo [FEHLER] Dienst '%Service%' ist NICHT gestartet!
     echo Pruefe die Logs unter: %Logdir%
 )
-goto ENDE
+goto SM_ENDE
 
-:CHECKDEL
+:SM_CHECKDEL
 sc query "%Service%" >nul 2>&1
 if %errorlevel%==0 (
     echo [FEHLER] Dienst '%Service%' wurde nicht vollstaendig geloescht!
@@ -325,10 +346,90 @@ if %errorlevel%==0 (
     echo [OK] Dienst '%Service%' erfolgreich geloescht!
     set "DienstExistiert=0"
 )
-goto ENDE
+goto SM_ENDE
 
-:ENDE
-echo.
+:SM_ENDE
+echo(
 echo Script beendet. Druecken Sie eine Taste...
 pause
+exit /b
+
+
+REM =================== Self-Update: Funktionen ===================
+
+:SU_DOWNLOAD
+REM %1=URL %2=OUT %3=DL(curl|bits)
+set "URL=%~1"
+set "OUT=%~2"
+set "DL=%~3"
+del /q "%OUT%" >nul 2>&1
+if /I "%DL%"=="cert" (
+  certutil -urlcache -split -f "%URL%" "%OUT%" >nul 2>&1
+  goto :eof
+)
+if /I "%DL%"=="curl" (
+  curl -sL "%URL%" -o "%OUT%" 2>nul
+  goto :eof
+)
+if /I "%DL%"=="bits" (
+  bitsadmin /transfer ddnstmp /download /priority FOREGROUND "%URL%" "%OUT%" >nul 2>&1
+  goto :eof
+)
 goto :eof
+
+:SU_VERCMP
+REM Vergleicht A vs B (Semver bis 4 Teile). Ergebnis in %3:
+REM -1 = B < A, 0 = gleich, 1 = B > A
+setlocal EnableDelayedExpansion
+set "A=%~1"
+set "B=%~2"
+for /f "tokens=1-4 delims=." %%a in ("%A%") do (set a1=%%a&set a2=%%b&set a3=%%c&set a4=%%d)
+for /f "tokens=1-4 delims=." %%a in ("%B%") do (set b1=%%a&set b2=%%b&set b3=%%c&set b4=%%d)
+for %%v in (a1 a2 a3 a4 b1 b2 b3 b4) do if "!%%v!"=="" set "%%v=0"
+for %%v in (a1 a2 a3 a4 b1 b2 b3 b4) do (
+  for /f "delims=0123456789" %%x in ("!%%v!") do (endlocal & set "%~3=" & goto :eof)
+)
+for %%i in (1 2 3 4) do (
+  set /a da=!a%%i!, db=!b%%i!
+  if !db! gtr !da! (endlocal & set "%~3=1"  & goto :eof)
+  if !db! lss !da! (endlocal & set "%~3=-1" & goto :eof)
+)
+endlocal & set "%~3=0"
+goto :eof
+
+:SU_WRITE_UPDATER
+REM %1=UpdaterPath %2=SelfPath %3=TmpNew %4=RestartFlag %5=LogPath
+setlocal DisableDelayedExpansion
+set "UP=%~1"
+set "SP=%~2"
+set "TN=%~3"
+set "RF=%~4"
+set "LG=%~5"
+> "%UP%" (
+  echo @echo off
+  echo setlocal
+  echo ^>^>"%LG%" echo [%%date%% %%time%%] UPDATER_START
+  echo ping 127.0.0.1 -n 2 ^>nul
+  echo if not exist "%TN%" ^( ^>^>"%LG%" echo [%%date%% %%time%%] ERR_NO_TMP ^& exit /b ^)
+  echo copy /Y "%TN%" "%SP%" ^>nul
+  echo if errorlevel 1 goto :retry
+  echo del /q "%TN%" ^>nul 2^>^&1
+  echo if not exist "%RF%" echo restarted^>"%RF%"
+  echo start "" "%SP%"
+  echo ^>^>"%LG%" echo [%%date%% %%time%%] UPDATER_RESTARTED
+  echo ping 127.0.0.1 -n 1 ^>nul
+  echo del /q "%%~f0" ^>nul 2^>^&1
+  echo exit /b
+  echo :retry
+  echo ^>^>"%LG%" echo [%%date%% %%time%%] UPDATER_RETRY_COPY
+  echo ping 127.0.0.1 -n 2 ^>nul
+  echo copy /Y "%TN%" "%SP%" ^>nul
+  echo if errorlevel 1 goto :retry
+  echo del /q "%TN%" ^>nul 2^>^&1
+  echo if not exist "%RF%" echo restarted^>"%RF%"
+  echo start "" "%SP%"
+  echo ^>^>"%LG%" echo [%%date%% %%time%%] UPDATER_RESTARTED2
+  echo ping 127.0.0.1 -n 1 ^>nul
+  echo del /q "%%~f0" ^>nul 2^>^&1
+)
+endlocal & goto :eof
