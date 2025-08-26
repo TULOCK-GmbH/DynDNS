@@ -289,7 +289,6 @@ goto SM_END
 echo(
 echo Script beendet. Taste druecken...
 call :LOG "--- END ---"
-pause
 goto :EOF
 
 
