@@ -7,7 +7,7 @@ REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
 
 REM =================== Self-Update Konfiguration ===================
-set "InstallerVersion=1.0.0"
+set "InstallerVersion=1.0.2"
 set "VersionUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.version"
 set "ScriptUrl=https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/install_ddns.bat"
 
@@ -82,24 +82,31 @@ if "%RESULT%"=="1" (
 
   REM ===== Robuster Neustart via kleinem VBS-Updater =====
   REM Ersetzt laufende BAT und startet sie neu – ohne cmd-Quote-Fallen
-  >"%UpdaterVbs%" (
-    echo WScript.Sleep 400
-    echo Set fso=CreateObject("Scripting.FileSystemObject")
-    echo src=^"%TmpNew%^": dst=^"%SelfPath%^"
-    echo If Not fso.FileExists(src) Then WScript.Quit 1
-    echo On Error Resume Next
-    echo fso.CopyFile src, dst, True
-    echo If Err.Number^<>0 Then WScript.Sleep 600: Err.Clear: fso.CopyFile src, dst, True
-    echo fso.DeleteFile src, True
-    echo Dim sh: Set sh=CreateObject("WScript.Shell")
-    echo sh.Run """" ^& dst ^& """", 1, False
-    echo On Error Resume Next
-    echo fso.DeleteFile WScript.ScriptFullName, True
-  )
-  REM WScript = GUI-loser Start (kein neues Konsolenfenster)
-  start "" wscript.exe "%UpdaterVbs%"
-  REM Aktuelle Instanz sauber beenden (kein "exit /b" in interaktiver Session)
-  goto :EOF
+  REM ===== Robuster Neustart via kleinem VBS-Updater =====
+> "%UpdaterVbs%" (
+  echo WScript.Sleep 400
+  echo Set fso=CreateObject("Scripting.FileSystemObject")
+  echo src="%TmpNew%": dst="%SelfPath%"
+  echo If Not fso.FileExists(src) Then
+  echo   WScript.Quit 1
+  echo End If
+  echo On Error Resume Next
+  echo fso.CopyFile src, dst, True
+  echo If Err.Number ^<> 0 Then
+  echo   WScript.Sleep 600
+  echo   Err.Clear
+  echo   fso.CopyFile src, dst, True
+  echo End If
+  echo fso.DeleteFile src, True
+  echo Dim sh: Set sh=CreateObject("WScript.Shell")
+  echo sh.Run """" ^& dst ^& """", 1, False
+  echo On Error Resume Next
+  echo fso.DeleteFile WScript.ScriptFullName, True
+)
+
+start "" wscript.exe "%UpdaterVbs%"
+goto :EOF
+
 )
 
 :AFTER_SELFUPDATE
