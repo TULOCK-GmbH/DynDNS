@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM =========================================================
-REM  install_DDNS.bat – v1.2.2
+REM  install_DDNS.bat – v1.2.21
 REM  Self-Update (VBS) + DynDNS Service Manager
 REM  (C) 2025 Joerg Wannemacher
 REM =========================================================
