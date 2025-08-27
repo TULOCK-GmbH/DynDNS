@@ -1,4 +1,4 @@
-# Version: 2.3.0 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + dual GitHub URLs + Health-Log + safe Stop-Logging + URL redaction + self-check)
+# Version: 2.3.1 (AutoUpdate on start + MakeVersionFile + SHA256 verify + LocalMachine DPAPI + encrypted GitHub URLs + URL redaction + safe logging + first-run bootstrap + health + clean stop)
 
 param(
     [int]$IntervalSec = 60,
@@ -78,6 +78,70 @@ function Safe-Url([string]$url){
     }
 }
 
+# =========================================================
+# ensure folder and first-run bootstrap for update URLs
+# =========================================================
+function Ensure-SettingsFolder {
+    $settingsDir = Split-Path $infoUrlFile -Parent
+    if (-not (Test-Path $settingsDir)) {
+        New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null
+    }
+}
+
+# default raw URLs (pre-filled)
+$DefaultInfoUrl   = "https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.version"
+$DefaultScriptUrl = "https://raw.githubusercontent.com/TULOCK-GmbH/DynDNS/main/DynDNS-Update.ps1"
+$DefaultHashUrl   = ""  # optional: if you publish a separate sha256 file
+
+function Bootstrap-UpdateUrls {
+    param(
+        [string]$ParamInfoUrl,
+        [string]$ParamScriptUrl,
+        [string]$ParamHashUrl
+    )
+    Ensure-SettingsFolder
+
+    $urls = Get-UpdateUrls
+    if ($urls.InfoUrl -and $urls.ScriptUrl) {
+        return $true
+    }
+
+    $info   = if ($ParamInfoUrl)   { $ParamInfoUrl }   elseif ($DefaultInfoUrl)   { $DefaultInfoUrl }   else { "" }
+    $script = if ($ParamScriptUrl) { $ParamScriptUrl } elseif ($DefaultScriptUrl) { $DefaultScriptUrl } else { "" }
+    $hash   = if ($ParamHashUrl)   { $ParamHashUrl }   elseif ($DefaultHashUrl)   { $DefaultHashUrl }   else { "" }
+
+    if (-not $info -or -not $script) {
+        if ($Host.Name -match 'ConsoleHost') {
+            Write-Host "No update URLs found. Please enter Raw URLs now." -ForegroundColor Yellow
+            if (-not $info)   { $info   = Read-Host "Raw URL to version file (e.g. DynDNS-Update.version)" }
+            if (-not $script) { $script = Read-Host "Raw URL to script file (e.g. DynDNS-Update.ps1)" }
+            if (-not $hash)   { $hash   = Read-Host "Optional: Raw URL to SHA256 file (Enter to skip)" }
+        }
+    }
+
+    if ($info -and $script) {
+        try {
+            Protect-String $info   | Set-Content -Path $infoUrlFile
+            Protect-String $script | Set-Content -Path $scriptUrlFile
+            if ($hash) { Protect-String $hash | Set-Content -Path $hashUrlFile }
+            $ver = Get-UpdateUrls
+            if ($ver.InfoUrl -and $ver.ScriptUrl) {
+                Write-Log ("update URLs saved on first start (info={0}, script={1})" -f (Safe-Url $ver.InfoUrl), (Safe-Url $ver.ScriptUrl)) "INFO"
+                return $true
+            } else {
+                Write-Log "update URL save verification failed (empty after write)." "WARN"
+                return $false
+            }
+        } catch {
+            Write-Log ("failed to bootstrap update URLs: {0}" -f $_.Exception.Message) "ERROR"
+            return $false
+        }
+    } else {
+        Write-Log "no update URLs provided (defaults/interactive). AutoUpdate will be skipped." "WARN"
+        return $false
+    }
+}
+
 # config checks
 if ($IntervalSec -lt 10)   { Write-Host "IntervalSec < 10s, set to 10s." -ForegroundColor Yellow; $IntervalSec = 10 }
 if ($IntervalSec -gt 86400){ Write-Host "IntervalSec > 86400s, set to 86400s." -ForegroundColor Yellow; $IntervalSec = 86400 }
@@ -141,18 +205,25 @@ function Set-UpdateUrls {
         [string]$ScriptUrl,
         [string]$HashUrl
     )
+    Ensure-SettingsFolder
     if ([string]::IsNullOrWhiteSpace($InfoUrl))   { $InfoUrl   = Read-Host "enter GitHub raw URL to version file (e.g. DynDNS-Update.version)" }
     if ([string]::IsNullOrWhiteSpace($ScriptUrl)) { $ScriptUrl = Read-Host "enter GitHub raw URL to script (e.g. DynDNS-Update.ps1)" }
     if ([string]::IsNullOrWhiteSpace($HashUrl))   { $HashUrl   = Read-Host "optional: raw URL to SHA256 file (press Enter to skip)" }
 
     if ([string]::IsNullOrWhiteSpace($InfoUrl) -or [string]::IsNullOrWhiteSpace($ScriptUrl)) {
-        Write-Log "missing URL(s)." "WARN"; return
+        Write-Log "missing URL(s)." "WARN"
+        return
     }
     try {
         Protect-String $InfoUrl   | Set-Content -Path $infoUrlFile
         Protect-String $ScriptUrl | Set-Content -Path $scriptUrlFile
         if (-not [string]::IsNullOrWhiteSpace($HashUrl)) { Protect-String $HashUrl | Set-Content -Path $hashUrlFile }
-        Write-Log "update URLs saved (machine-bound encrypted)." "INFO"
+        $verify = Get-UpdateUrls
+        if ($verify.InfoUrl -and $verify.ScriptUrl) {
+            Write-Log ("update URLs saved ok (info={0}, script={1})" -f (Safe-Url $verify.InfoUrl), (Safe-Url $verify.ScriptUrl)) "INFO"
+        } else {
+            Write-Log "update URL save verification failed (empty values after write)." "WARN"
+        }
     } catch {
         Write-Log ("failed to save update URLs: {0}" -f $_.Exception.Message) "ERROR"
     }
@@ -212,8 +283,8 @@ function Parse-ExpectedHash([string]$versionText){
     return $null
 }
 function Compute-StringSHA256([string]$text){
-    $sha=[System.Security.Cryptography.SHA256]::Create()
-    try { $bytes=[Text.Encoding]::UTF8.GetBytes($text); $hash=$sha.ComputeHash($bytes); -join ($hash|%{ $_.ToString("x2") }) }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $bytes=[Text.Encoding]::UTF8.GetBytes($text); $hash=$sha.ComputeHash($bytes); -join ($hash | ForEach-Object { $_.ToString("x2") }) }
     finally { $sha.Dispose() }
 }
 function Get-ExpectedHashFromUrl([string]$Url){
@@ -268,7 +339,7 @@ function Self-Update([string]$InfoUrl,[string]$ScriptUrl,[string]$HashUrl) {
         Copy-Item -Path $tmp -Destination $selfPath -Force
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 
-        Write-Log ("updated script to version {0}. backup: {1}" -f $remoteVer, $backup) "INFO"
+        Write-Log ("updated script to new version. backup: {0}" -f $backup) "INFO"
         Write-Host "Self-update complete. Please re-run the script." -ForegroundColor Green
     } catch {
         Write-Log ("self-update failed: {0}" -f $_.Exception.Message) "ERROR"
@@ -289,7 +360,7 @@ function Make-VersionFile {
         if ($content -match '(?m)^\s*#\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+)') { $ver = $Matches[1] }
         if (-not $ver) { throw "no version header found in $ScriptPath" }
         $sha = [System.Security.Cryptography.SHA256]::Create()
-        try { $bytes=[Text.Encoding]::UTF8.GetBytes($content); $hash=$sha.ComputeHash($bytes); $hex=-join ($hash|%{ $_.ToString("x2") }) }
+        try { $bytes=[Text.Encoding]::UTF8.GetBytes($content); $hash=$sha.ComputeHash($bytes); $hex=-join ($hash | ForEach-Object { $_.ToString("x2") }) }
         finally { $sha.Dispose() }
         $lines = @("version=$ver","sha256=$hex")
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -297,10 +368,7 @@ function Make-VersionFile {
         Write-Host "[INFO] wrote version file: $OutPath" -ForegroundColor Green
         Write-Host "version=$ver"
         Write-Host "sha256=$hex"
-    } catch {
-        Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
-        exit 1
-    }
+    } catch { Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 }
 
 # === create folders ===
@@ -309,6 +377,9 @@ if (!(Test-Path $Install)) {
     New-Item -ItemType Directory -Path (Join-Path $Install "Logs") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Install "Settings") -Force | Out-Null
 }
+
+# first-run bootstrap for update URLs (before MakeVersionFile/UpdateNow/AutoUpdate)
+[void](Bootstrap-UpdateUrls -ParamInfoUrl $UpdateInfoUrl -ParamScriptUrl $UpdateScriptUrl -ParamHashUrl $UpdateHashUrl)
 
 # === MakeVersionFile path ===
 if ($MakeVersionFile) {
@@ -369,7 +440,7 @@ if (-not $NoAutoUpdate) {
     }
 }
 
-# === first run init ===
+# === first run init for DynDNS ===
 if (!(Test-Path $settingsFile) -or !(Test-Path $pwFile)) {
     Write-Host "==== DynDNS settings init ====" -ForegroundColor Cyan
     do {
@@ -411,7 +482,7 @@ $url = "https://dynamicdns.key-systems.net/update.php?hostname=$fullDomain&passw
 
 # === startup logging ===
 Write-Log "=== DynDNS Monitor START ===" "INFO"
-Write-Log ("Version: {0}" -f "2.3.0") "INFO"
+Write-Log ("Version: {0}" -f "2.3.1") "INFO"
 Write-Log ("Script: {0}" -f $selfPath) "INFO"
 Write-Log ("Domain: {0}" -f $fullDomain) "INFO"
 Write-Log ("IntervalSec: {0}" -f $IntervalSec) "INFO"
